@@ -35,6 +35,8 @@ import {
 	getBookmarkPreviewOverlaySource,
 } from "@/timeline/bookmarks/index";
 
+import { VietnameseAiPanel } from "@/components/editor/vietnamese-ai";
+
 export default function Editor() {
 	const params = useParams();
 	const projectId = params.project_id as string;
@@ -46,7 +48,7 @@ export default function Editor() {
 					<DegradedRendererBanner />
 					<EditorHeader />
 					<div className="min-h-0 min-w-0 flex-1">
-						<EditorLayout />
+						<EditorLayout projectId={projectId} />
 					</div>
 					<Onboarding />
 					<MigrationDialog />
@@ -78,7 +80,7 @@ function DegradedRendererBanner() {
 	);
 }
 
-function EditorLayout() {
+function EditorLayout({ projectId }: { projectId: string }) {
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
 	const activeScene = useEditor((editor) =>
@@ -189,7 +191,7 @@ function EditorLayout() {
 						maxSize={40}
 						className="min-w-0"
 					>
-						<PropertiesPanel />
+						<VietnameseAiPanel projectId={projectId} />
 					</ResizablePanel>
 				</ResizablePanelGroup>
 			</ResizablePanel>
