@@ -484,7 +484,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							htmlFor="subtitle-background"
 							className="cursor-pointer text-xs"
 						>
-							Nền kín cho phụ đề
+							Bật nền phụ đề (Hỗ trợ làm mờ & trong suốt)
 						</Label>
 					</div>
 					{subtitleBackground.enabled && (
@@ -501,51 +501,154 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									onChange={(event) =>
 										updateSubtitleBackground({ color: event.target.value })
 									}
-									className="h-7 w-10 cursor-pointer"
+									className="h-7 w-10 cursor-pointer rounded border border-neutral-700 bg-transparent"
 								/>
 							</div>
-							<Label htmlFor="subtitle-padding-x" className="text-xs">
-								Mở rộng nền ngang: {subtitleBackground.paddingX}
-							</Label>
-							<input
-								type="range"
-								className="w-full accent-rose-500"
-								id="subtitle-padding-x"
-								aria-label="Mở rộng nền ngang"
-								min={0}
-								max={600}
-								step={10}
-								disabled={isProcessing}
-								value={subtitleBackground.paddingX}
-								onChange={(event) =>
-									updateSubtitleBackground({
-										paddingX: Number(event.target.value),
-									})
-								}
-							/>
-							<Label htmlFor="subtitle-padding-y" className="text-xs">
-								Mở rộng nền dọc: {subtitleBackground.paddingY}
-							</Label>
-							<input
-								type="range"
-								className="w-full accent-rose-500"
-								id="subtitle-padding-y"
-								aria-label="Mở rộng nền dọc"
-								min={0}
-								max={300}
-								step={10}
-								disabled={isProcessing}
-								value={subtitleBackground.paddingY}
-								onChange={(event) =>
-									updateSubtitleBackground({
-										paddingY: Number(event.target.value),
-									})
-								}
-							/>
-							<p className="text-[11px] text-neutral-400">
-								Nền đặc che nội dung phía sau mỗi câu phụ đề. Tăng vùng nền để
-								phủ phụ đề gốc. Thay đổi áp dụng ngay cho các caption trên
-								timeline.
+
+							{/* Opacity / Trong suốt */}
+							<div className="flex flex-col gap-1">
+								<div className="flex justify-between text-xs">
+									<Label htmlFor="subtitle-opacity" className="text-xs">
+										Độ mờ trong suốt (Opacity)
+									</Label>
+									<span className="font-mono text-neutral-400">
+										{subtitleBackground.opacity ?? 75}%
+									</span>
+								</div>
+								<input
+									type="range"
+									className="w-full accent-rose-500"
+									id="subtitle-opacity"
+									aria-label="Độ mờ trong suốt"
+									min={10}
+									max={100}
+									step={5}
+									disabled={isProcessing}
+									value={subtitleBackground.opacity ?? 75}
+									onChange={(event) =>
+										updateSubtitleBackground({
+											opacity: Number(event.target.value),
+										})
+									}
+								/>
+							</div>
+
+							{/* Blur / Nhòe mờ */}
+							<div className="flex flex-col gap-1">
+								<div className="flex justify-between text-xs">
+									<Label htmlFor="subtitle-blur" className="text-xs">
+										Độ nhòe mờ viền (Blur)
+									</Label>
+									<span className="font-mono text-neutral-400">
+										{subtitleBackground.blur ?? 12}px
+									</span>
+								</div>
+								<input
+									type="range"
+									className="w-full accent-rose-500"
+									id="subtitle-blur"
+									aria-label="Độ nhòe mờ viền"
+									min={0}
+									max={40}
+									step={2}
+									disabled={isProcessing}
+									value={subtitleBackground.blur ?? 12}
+									onChange={(event) =>
+										updateSubtitleBackground({
+											blur: Number(event.target.value),
+										})
+									}
+								/>
+							</div>
+
+							{/* Corner Radius */}
+							<div className="flex flex-col gap-1">
+								<div className="flex justify-between text-xs">
+									<Label htmlFor="subtitle-corner-radius" className="text-xs">
+										Bo tròn góc
+									</Label>
+									<span className="font-mono text-neutral-400">
+										{subtitleBackground.cornerRadius ?? 20}%
+									</span>
+								</div>
+								<input
+									type="range"
+									className="w-full accent-rose-500"
+									id="subtitle-corner-radius"
+									aria-label="Bo tròn góc"
+									min={0}
+									max={50}
+									step={2}
+									disabled={isProcessing}
+									value={subtitleBackground.cornerRadius ?? 20}
+									onChange={(event) =>
+										updateSubtitleBackground({
+											cornerRadius: Number(event.target.value),
+										})
+									}
+								/>
+							</div>
+
+							{/* Padding X */}
+							<div className="flex flex-col gap-1">
+								<div className="flex justify-between text-xs">
+									<Label htmlFor="subtitle-padding-x" className="text-xs">
+										Mở rộng nền ngang
+									</Label>
+									<span className="font-mono text-neutral-400">
+										{subtitleBackground.paddingX}
+									</span>
+								</div>
+								<input
+									type="range"
+									className="w-full accent-rose-500"
+									id="subtitle-padding-x"
+									aria-label="Mở rộng nền ngang"
+									min={0}
+									max={600}
+									step={10}
+									disabled={isProcessing}
+									value={subtitleBackground.paddingX}
+									onChange={(event) =>
+										updateSubtitleBackground({
+											paddingX: Number(event.target.value),
+										})
+									}
+								/>
+							</div>
+
+							{/* Padding Y */}
+							<div className="flex flex-col gap-1">
+								<div className="flex justify-between text-xs">
+									<Label htmlFor="subtitle-padding-y" className="text-xs">
+										Mở rộng nền dọc
+									</Label>
+									<span className="font-mono text-neutral-400">
+										{subtitleBackground.paddingY}
+									</span>
+								</div>
+								<input
+									type="range"
+									className="w-full accent-rose-500"
+									id="subtitle-padding-y"
+									aria-label="Mở rộng nền dọc"
+									min={0}
+									max={300}
+									step={10}
+									disabled={isProcessing}
+									value={subtitleBackground.paddingY}
+									onChange={(event) =>
+										updateSubtitleBackground({
+											paddingY: Number(event.target.value),
+										})
+									}
+								/>
+							</div>
+
+							<p className="text-[11px] text-neutral-400 leading-relaxed">
+								Tùy chỉnh độ mờ trong suốt (Opacity) và độ nhòe (Blur) giúp phụ đề
+								nổi bật, mềm mại và hòa quyện với video mà không che khuất cảnh
+								quay. Thay đổi áp dụng ngay cho các caption trên timeline.
 							</p>
 						</div>
 					)}
