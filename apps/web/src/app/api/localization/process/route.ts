@@ -6,11 +6,9 @@ export async function POST(request: NextRequest) {
 	try {
 		const { projectId, videoPath, voice } = await request.json();
 
-		if (!projectId || !videoPath) {
-			return NextResponse.json(
-				{ success: false, error: "Missing projectId or videoPath" },
-				{ status: 400 },
-			);
+		let targetVideoPath = videoPath;
+		if (!targetVideoPath || targetVideoPath === "default") {
+			targetVideoPath = path.join(process.cwd(), ".local_storage", "downloads", `${projectId}.mp4`);
 		}
 
 		const workDir = path.join(process.cwd(), ".local_storage", "projects");
@@ -18,7 +16,7 @@ export async function POST(request: NextRequest) {
 
 		const result = await pipeline.run({
 			projectId,
-			videoPath,
+			videoPath: targetVideoPath,
 			workDir,
 			voice: voice || "vi-VN-HoaiMyNeural",
 		});

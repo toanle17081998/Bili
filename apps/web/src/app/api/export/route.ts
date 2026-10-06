@@ -13,11 +13,9 @@ export async function POST(request: NextRequest) {
 			voiceoverVolume,
 		} = await request.json();
 
-		if (!videoPath) {
-			return NextResponse.json(
-				{ success: false, error: "Missing videoPath" },
-				{ status: 400 },
-			);
+		let targetVideoPath = videoPath;
+		if (!targetVideoPath || targetVideoPath === "default") {
+			targetVideoPath = path.join(process.cwd(), ".local_storage", "downloads", `${projectId}.mp4`);
 		}
 
 		const exportDir = path.join(process.cwd(), ".local_storage", "exports");
@@ -45,7 +43,7 @@ export async function POST(request: NextRequest) {
 		}
 
 		await FFmpegService.exportVerticalVideo({
-			videoPath,
+			videoPath: targetVideoPath,
 			subtitlesPath,
 			outputPath,
 			originalAudioVolume: originalAudioVolume ?? 0.2,
