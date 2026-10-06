@@ -1,4 +1,5 @@
 import type { TranscriptSegment, TranslationSegment } from "@/localization/schemas";
+export { FreeTranslateLLMProvider } from "./free-translate";
 
 export interface LLMProvider {
 	readonly name: string;
@@ -40,6 +41,7 @@ Nhiệm vụ của bạn:
 ]
 
 Dưới đây là các đoạn cần chuyển ngữ:
+Return exactly one result per input, in the same order. Copy sourceText exactly; never combine or skip segments.
 ${JSON.stringify(
 	segments.map((s) => ({
 		sourceStart: s.start,
@@ -96,6 +98,7 @@ export class OpenAILLMProvider implements LLMProvider {
 		const prompt = `
 Bạn là chuyên gia chuyển ngữ video sang tiếng Việt tự nhiên (Shorts/TikTok).
 Chuyển đổi từng đoạn transcript sau sang lời thuyết minh tiếng Việt súc tích, tự nhiên, khớp thời lượng targetDuration:
+Return exactly one result per input, in the same order. Copy sourceText exactly; never combine or skip segments.
 ${JSON.stringify(
 	segments.map((s) => ({
 		sourceStart: s.start,

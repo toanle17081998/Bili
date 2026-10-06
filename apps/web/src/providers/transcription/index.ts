@@ -1,5 +1,6 @@
 import type { TranscriptSegment } from "@/localization/schemas";
 import fs from "fs/promises";
+export { FasterWhisperTranscriptionProvider } from "./faster-whisper";
 
 export interface TranscriptionProvider {
 	readonly name: string;

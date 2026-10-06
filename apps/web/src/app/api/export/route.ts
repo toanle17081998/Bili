@@ -14,8 +14,14 @@ export async function POST(request: NextRequest) {
 		} = await request.json();
 
 		let targetVideoPath = videoPath;
-		if (!targetVideoPath || targetVideoPath === "default") {
-			targetVideoPath = path.join(process.cwd(), ".local_storage", "downloads", `${projectId}.mp4`);
+		const downloadsDir = path.join(process.cwd(), ".local_storage", "downloads");
+		const fsModule = await import("fs");
+		if (!targetVideoPath || targetVideoPath === "default" || !fsModule.existsSync(targetVideoPath)) {
+			if (fsModule.existsSync(path.join(downloadsDir, `${projectId}.mp4`))) {
+				targetVideoPath = path.join(downloadsDir, `${projectId}.mp4`);
+			} else if (fsModule.existsSync(path.join(downloadsDir, `${projectId}.full.mp4`))) {
+				targetVideoPath = path.join(downloadsDir, `${projectId}.full.mp4`);
+			}
 		}
 
 		const exportDir = path.join(process.cwd(), ".local_storage", "exports");
@@ -39,11 +45,29 @@ export async function POST(request: NextRequest) {
 					return `${idx + 1}\n${formatSrtTime(sub.start)} --> ${formatSrtTime(sub.end)}\n${sub.text}\n`;
 				})
 				.join("\n");
-			await fs.writeFile(subtitlesPath, srtContent, "utf8");
+			await fs.writeFile(subtitlesPath, "\uFEFF" + srtContent, "utf8");
+		}
+
+		// Check for voiceover tracks in project directory
+		const projectDir = path.join(process.cwd(), ".local_storage", "projects", projectId);
+		let voiceoverAudioPath: string | undefined;
+		try {
+			const files = await fs.readdir(projectDir);
+			const voiceFiles = files.filter((f) => f.startsWith("voice_") && f.endsWith(".mp3")).sort();
+			if (voiceFiles.length > 0) {
+				const combinedVoice = path.join(exportDir, `${projectId}_voiceover.mp3`);
+				const inputs = voiceFiles.map((f) => ["-i", path.join(projectDir, f)]).flat();
+				const filter = voiceFiles.map((_, i) => `[${i}:a]`).join("") + `concat=n=${voiceFiles.length}:v=0:a=1[aout]`;
+				await FFmpegService.runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filter, "-map", "[aout]", combinedVoice]);
+				voiceoverAudioPath = combinedVoice;
+			}
+		} catch (e) {
+			console.warn("No voiceover files found or combine failed:", e);
 		}
 
 		await FFmpegService.exportVerticalVideo({
 			videoPath: targetVideoPath,
+			voiceoverAudioPath,
 			subtitlesPath,
 			outputPath,
 			originalAudioVolume: originalAudioVolume ?? 0.2,

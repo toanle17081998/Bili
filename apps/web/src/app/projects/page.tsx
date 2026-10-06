@@ -586,6 +586,8 @@ function ProjectItem({
 							src={project.thumbnail}
 							alt="Project thumbnail"
 							fill
+							unoptimized
+							referrerPolicy="no-referrer"
 							className="object-cover"
 						/>
 					) : (
@@ -622,6 +624,8 @@ function ProjectItem({
 						src={project.thumbnail}
 						alt="Project thumbnail"
 						fill
+						unoptimized
+						referrerPolicy="no-referrer"
 						className="object-cover"
 					/>
 				) : (

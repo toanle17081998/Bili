@@ -61,6 +61,7 @@ export const LocalizedVideoProjectSchema = z.object({
 		fps: z.number().default(30),
 	}),
 	transcript: z.array(TranscriptSegmentSchema),
+	backgroundAudioUrl: z.string().optional(),
 	translations: z.array(TranslationSegmentSchema),
 	voiceovers: z.array(VoiceSegmentSchema),
 	subtitles: z.array(SubtitleSegmentSchema),

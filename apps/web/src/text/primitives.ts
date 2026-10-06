@@ -51,6 +51,7 @@ export interface ResolvedTextBackgroundLike {
 	offsetX: number;
 	offsetY: number;
 	cornerRadius: number;
+	blur?: number;
 }
 
 export function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
@@ -183,16 +184,34 @@ export function drawMeasuredTextLayout({
 				}) / 100;
 			const radius =
 				(Math.min(backgroundRect.width, backgroundRect.height) / 2) * p;
-			ctx.fillStyle = backgroundColor;
-			ctx.beginPath();
-			ctx.roundRect(
-				backgroundRect.left,
-				backgroundRect.top,
-				backgroundRect.width,
-				backgroundRect.height,
-				radius,
-			);
-			ctx.fill();
+			const blur = background.blur ?? 0;
+			if (blur > 0) {
+				ctx.save();
+				ctx.shadowColor = backgroundColor;
+				ctx.shadowBlur = blur;
+				ctx.fillStyle = backgroundColor;
+				ctx.beginPath();
+				ctx.roundRect(
+					backgroundRect.left,
+					backgroundRect.top,
+					backgroundRect.width,
+					backgroundRect.height,
+					radius,
+				);
+				ctx.fill();
+				ctx.restore();
+			} else {
+				ctx.fillStyle = backgroundColor;
+				ctx.beginPath();
+				ctx.roundRect(
+					backgroundRect.left,
+					backgroundRect.top,
+					backgroundRect.width,
+					backgroundRect.height,
+					radius,
+				);
+				ctx.fill();
+			}
 			ctx.fillStyle = textColor;
 		}
 	}

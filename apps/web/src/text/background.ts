@@ -9,4 +9,5 @@ export interface TextBackground {
 	paddingY?: number;
 	offsetX?: number;
 	offsetY?: number;
+	blur?: number;
 }

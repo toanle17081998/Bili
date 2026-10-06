@@ -35,6 +35,8 @@ import {
 	getBookmarkPreviewOverlaySource,
 } from "@/timeline/bookmarks/index";
 
+import { VideoTools } from "@/components/editor/video-tools";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { VietnameseAiPanel } from "@/components/editor/vietnamese-ai";
 
 export default function Editor() {
@@ -81,6 +83,7 @@ function DegradedRendererBanner() {
 }
 
 function EditorLayout({ projectId }: { projectId: string }) {
+	const [toolTab, setToolTab] = useState("video");
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
 	const activeScene = useEditor((editor) =>
@@ -191,7 +194,26 @@ function EditorLayout({ projectId }: { projectId: string }) {
 						maxSize={40}
 						className="min-w-0"
 					>
-						<VietnameseAiPanel projectId={projectId} />
+						<Tabs
+							value={toolTab}
+							onValueChange={setToolTab}
+							className="flex h-full min-h-0 flex-col"
+						>
+							<TabsList className="w-full shrink-0">
+								<TabsTrigger value="video">Video</TabsTrigger>
+								<TabsTrigger value="details">Chi tiết</TabsTrigger>
+								<TabsTrigger value="ai">AI Việt hóa</TabsTrigger>
+							</TabsList>
+							<TabsContent value="video" className="min-h-0 flex-1">
+								<VideoTools onEditCover={() => setToolTab("details")} />
+							</TabsContent>
+							<TabsContent value="details" className="min-h-0 flex-1">
+								<PropertiesPanel />
+							</TabsContent>
+							<TabsContent value="ai" className="min-h-0 flex-1">
+								<VietnameseAiPanel projectId={projectId} />
+							</TabsContent>
+						</Tabs>
 					</ResizablePanel>
 				</ResizablePanelGroup>
 			</ResizablePanel>

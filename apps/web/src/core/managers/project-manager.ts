@@ -79,11 +79,17 @@ export class ProjectManager {
 		await this.storageMigrationPromise;
 	}
 
-	async createNewProject({ name }: { name: string }): Promise<string> {
+	async createNewProject({
+		id,
+		name,
+	}: {
+		id?: string;
+		name: string;
+	}): Promise<string> {
 		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
 		const newProject: TProject = {
 			metadata: {
-				id: generateUUID(),
+				id: id || generateUUID(),
 				name,
 				duration: getProjectDurationFromScenes({ scenes: [mainScene] }),
 				createdAt: new Date(),
@@ -137,9 +143,11 @@ export class ProjectManager {
 		this.editor.scenes.clearScenes();
 
 		try {
-			const result = await storageService.loadProject({ id });
+			let result = await storageService.loadProject({ id });
 			if (!result) {
-				throw new Error(`Project with id ${id} not found`);
+				const projectName = id.startsWith("BV") || id.startsWith("av") ? `Video ${id}` : "Untitled Project";
+				await this.createNewProject({ id, name: projectName });
+				return;
 			}
 
 			const project = result.project;

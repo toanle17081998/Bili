@@ -12,7 +12,7 @@ export function Onboarding() {
 	const [step, setStep] = useState(0);
 	const [hasSeenOnboarding, setHasSeenOnboarding] = useLocalStorage({
 		key: "hasSeenOnboarding",
-		defaultValue: false,
+		defaultValue: true,
 	});
 
 	const isOpen = !hasSeenOnboarding;

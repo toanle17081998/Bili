@@ -341,6 +341,7 @@ export function buildSubtitleTextElement({
 				style.background.offsetX ?? DEFAULTS.text.background.offsetX,
 			"background.offsetY":
 				style.background.offsetY ?? DEFAULTS.text.background.offsetY,
+			"background.blur": style.background.blur ?? 0,
 			"transform.positionX": positionX,
 			"transform.positionY": positionY,
 		},

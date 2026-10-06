@@ -1,10 +1,11 @@
 import type {
-	SearchResult,
+	SearchPage,
 	VideoMetadata,
 	VideoPreview,
 	ImportedVideo,
 	VideoSourceProvider,
 } from "../types";
+import { fetchBilibiliSearch } from "./search-transport";
 import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
@@ -12,135 +13,205 @@ import { spawn } from "child_process";
 export class BilibiliProvider implements VideoSourceProvider {
 	readonly name = "bilibili";
 	private downloadDir: string;
+	private ytdlpPath: string;
+	private ffmpegDir: string;
 
 	constructor(downloadDir?: string) {
 		this.downloadDir =
-			downloadDir ||
-			path.join(process.cwd(), ".local_storage", "downloads");
+			downloadDir || path.join(process.cwd(), ".local_storage", "downloads");
+
+		this.ytdlpPath = path.join(
+			process.env.LOCALAPPDATA || "C:\\Users\\Admin\\AppData\\Local",
+			"Microsoft\\WinGet\\Packages\\yt-dlp.yt-dlp_Microsoft.Winget.Source_8wekyb3d8bbwe\\yt-dlp.exe",
+		);
+
+		this.ffmpegDir = path.join(
+			process.env.LOCALAPPDATA || "C:\\Users\\Admin\\AppData\\Local",
+			"Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build\\bin",
+		);
 	}
 
-	async search(query: string): Promise<SearchResult[]> {
-		// Use standard public bilibili search API with timeout & fallback to sample data if network restricted
-		try {
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), 4000);
+	async search(query: string, page = 1): Promise<SearchPage> {
+		const cleanQuery = query.trim();
+		if (!cleanQuery)
+			return { results: [], page: 1, pageSize: 20, total: 0, totalPages: 0 };
 
-			const res = await fetch(
-				`https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(query)}`,
-				{
-					signal: controller.signal,
-					headers: {
-						"User-Agent":
-							"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-						Referer: "https://www.bilibili.com/",
-					},
-				},
-			);
-			clearTimeout(timeout);
-
-			if (res.ok) {
-				const data = await res.json();
-				if (data.data?.result && Array.isArray(data.data.result)) {
-					return data.data.result.slice(0, 12).map((item: any) => ({
-						id: item.bvid || item.aid,
-						title: (item.title || "").replace(/<[^>]*>?/gm, ""),
-						duration: this.parseDuration(item.duration),
-						durationFormatted: item.duration || "01:00",
-						thumbnail: item.pic?.startsWith("//")
-							? `https:${item.pic}`
-							: item.pic,
-						uploader: item.author || "Bilibili Creator",
-						viewCount: item.play,
-						url: `https://www.bilibili.com/video/${item.bvid}`,
-						provider: "bilibili",
-					}));
-				}
+		// Check if user entered a direct Bilibili BV ID or URL
+		const bvMatch = cleanQuery.match(/BV[a-zA-Z0-9]{10}/i);
+		if (bvMatch) {
+			const bvid = bvMatch[0];
+			try {
+				const meta = await this.getMetadata(bvid);
+				return {
+					page: 1,
+					pageSize: 20,
+					total: 1,
+					totalPages: 1,
+					results: [
+						{
+							id: meta.id,
+							title: meta.title,
+							duration: meta.duration,
+							durationFormatted: this.formatSeconds(meta.duration),
+							thumbnail: meta.thumbnail,
+							uploader: meta.uploader,
+							url: meta.url,
+							provider: "bilibili",
+						},
+					],
+				};
+			} catch (e) {
+				console.warn(
+					"Direct BV lookup failed, proceeding to keyword search:",
+					e,
+				);
 			}
-		} catch (e) {
-			// Network blocked or timeout, return high quality sample results for development and smooth experience
-			console.warn("Bilibili public search unavailable, using curated sample results.");
 		}
 
-		return [
-			{
-				id: "BV1xx411c7mD",
-				title: "【街头美食】老北京地道炸酱面与爆肚，三十年老店香气扑鼻！",
-				duration: 38,
-				durationFormatted: "00:38",
-				thumbnail: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=600&auto=format&fit=crop&q=60",
-				uploader: "Ẩm Thực Đường Phố",
-				viewCount: "128.5K",
-				url: "https://www.bilibili.com/video/BV1xx411c7mD",
-				provider: "bilibili",
-			},
-			{
-				id: "BV1xx411c7mE",
-				title: "四川街头麻辣烫制作全过程，香辣过瘾，停不下来！",
-				duration: 45,
-				durationFormatted: "00:45",
-				thumbnail: "https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=600&auto=format&fit=crop&q=60",
-				uploader: "Vua Ăn Vặt Tứ Xuyên",
-				viewCount: "89.2K",
-				url: "https://www.bilibili.com/video/BV1xx411c7mE",
-				provider: "bilibili",
-			},
-			{
-				id: "BV1xx411c7mF",
-				title: "广式早茶经典虾饺皇，皮薄馅大晶莹剔透",
-				duration: 52,
-				durationFormatted: "00:52",
-				thumbnail: "https://images.unsplash.com/photo-1498654896293-37aacf113fd9?w=600&auto=format&fit=crop&q=60",
-				uploader: "Bếp Quảng Đông",
-				viewCount: "215.1K",
-				url: "https://www.bilibili.com/video/BV1xx411c7mF",
-				provider: "bilibili",
-			},
-		];
-	}
+		const data = await fetchBilibiliSearch(cleanQuery, page);
+		const results = (data.result ?? []).map((item: any) => {
+			const rawPic = item.pic || "";
+			const pic = rawPic.startsWith("//")
+				? `https:${rawPic}`
+				: rawPic.startsWith("http://")
+					? rawPic.replace("http://", "https://")
+					: rawPic;
 
-	async getMetadata(id: string): Promise<VideoMetadata> {
+			return {
+				id: item.bvid || String(item.aid),
+				title: (item.title || "").replace(/<[^>]*>?/gm, "").trim(),
+				duration: this.parseDuration(item.duration),
+				durationFormatted: item.duration || "01:00",
+				thumbnail: pic,
+				uploader: item.author || "Bilibili Creator",
+				viewCount:
+					typeof item.play === "number"
+						? `${Math.round(item.play / 1000)}K`
+						: item.play,
+				url: `https://www.bilibili.com/video/${item.bvid || item.aid}`,
+				provider: "bilibili",
+			};
+		});
 		return {
-			id,
-			title: "Món ngon đường phố Bilibili",
-			duration: 38,
-			thumbnail: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=600&auto=format&fit=crop&q=60",
-			uploader: "Ẩm Thực Đường Phố",
-			url: `https://www.bilibili.com/video/${id}`,
+			results,
+			page: data.page,
+			pageSize: data.pagesize,
+			total: data.numResults,
+			totalPages: data.numPages,
 		};
 	}
 
+	async getMetadata(id: string): Promise<VideoMetadata> {
+		try {
+			const jsonOutput = await new Promise<string>((resolve, reject) => {
+				const proc = spawn(this.ytdlpPath, [
+					"-j",
+					"--skip-download",
+					`https://www.bilibili.com/video/${id}`,
+				]);
+				let stdout = "";
+				let stderr = "";
+				proc.stdout.on("data", (chunk) => (stdout += chunk));
+				proc.stderr.on("data", (chunk) => (stderr += chunk));
+				proc.on("close", (code) => {
+					if (code === 0) resolve(stdout);
+					else reject(new Error(`yt-dlp exited ${code}: ${stderr}`));
+				});
+				proc.on("error", reject);
+			});
+
+			const parsed = JSON.parse(jsonOutput);
+			const thumbnail = parsed.thumbnails?.[0]?.url || parsed.thumbnail || "";
+			return {
+				id,
+				title: parsed.fulltitle || parsed.title || id,
+				duration: Math.round(parsed.duration || 60),
+				thumbnail: thumbnail.replace("http://", "https://"),
+				uploader: parsed.uploader || "Bilibili Creator",
+				url: `https://www.bilibili.com/video/${id}`,
+			};
+		} catch (err) {
+			console.warn("yt-dlp metadata failed, using fallback:", err);
+			return {
+				id,
+				title: `Video Bilibili ${id}`,
+				duration: 60,
+				thumbnail: "",
+				uploader: "Bilibili Creator",
+				url: `https://www.bilibili.com/video/${id}`,
+			};
+		}
+	}
+
 	async getPreview(id: string): Promise<VideoPreview> {
+		const meta = await this.getMetadata(id);
 		return {
-			id,
-			title: "Xem trước video Bilibili",
-			thumbnail: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=600&auto=format&fit=crop&q=60",
-			duration: 38,
-			videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+			id: meta.id,
+			title: meta.title,
+			thumbnail: meta.thumbnail,
+			duration: meta.duration,
+			videoUrl: `/api/source/preview?id=${id}`,
 		};
 	}
 
 	async importVideo(id: string): Promise<ImportedVideo> {
 		await fs.mkdir(this.downloadDir, { recursive: true });
-		const targetFile = path.join(this.downloadDir, `${id}.mp4`);
+		const targetFile = path.join(this.downloadDir, `${id}.full.mp4`);
 
-		// Check if file already exists locally
+		// Fetch real video metadata first
+		const meta = await this.getMetadata(id);
+
+		let needsDownload = false;
 		try {
-			await fs.access(targetFile);
+			const stat = await fs.stat(targetFile);
+			if (stat.size < 50000) needsDownload = true;
 		} catch {
-			// Download sample mp4 if remote is not reachable
-			const sampleUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
-			const res = await fetch(sampleUrl);
-			const buffer = await res.arrayBuffer();
-			await fs.writeFile(targetFile, Buffer.from(buffer));
+			needsDownload = true;
+		}
+
+		if (needsDownload) {
+			const downloadFile = path.join(
+				this.downloadDir,
+				`${id}.full.download.mp4`,
+			);
+			const videoUrl = `https://www.bilibili.com/video/${id}`;
+			await new Promise<void>((resolve, reject) => {
+				const proc = spawn(this.ytdlpPath, [
+					"--ffmpeg-location",
+					this.ffmpegDir,
+					"-f",
+					"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+					"-o",
+					downloadFile,
+					videoUrl,
+				]);
+
+				let stderr = "";
+				proc.stderr.on("data", (d) => (stderr += d.toString()));
+				proc.on("close", (code) => {
+					if (code === 0) resolve();
+					else
+						reject(
+							new Error(
+								`yt-dlp tải video thất bại (code ${code}): ${stderr.slice(0, 200)}`,
+							),
+						);
+				});
+				proc.on("error", reject);
+			});
+			const downloaded = await fs.stat(downloadFile);
+			if (!downloaded.size) throw new Error("Downloaded video is empty");
+			await fs.rename(downloadFile, targetFile);
 		}
 
 		return {
+			fullVideo: true,
 			provider: "bilibili",
 			sourceId: id,
 			sourceUrl: `https://www.bilibili.com/video/${id}`,
-			title: "Món ngon đường phố Bilibili",
-			thumbnail: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=600&auto=format&fit=crop&q=60",
-			duration: 38,
+			title: meta.title,
+			thumbnail: meta.thumbnail,
+			duration: meta.duration,
 			localMediaPath: targetFile,
 			createdAt: new Date().toISOString(),
 		};
@@ -153,5 +224,11 @@ export class BilibiliProvider implements VideoSourceProvider {
 		if (parts.length === 3)
 			return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
 		return 60;
+	}
+
+	private formatSeconds(sec: number): string {
+		const m = Math.floor(sec / 60);
+		const s = Math.floor(sec % 60);
+		return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 	}
 }

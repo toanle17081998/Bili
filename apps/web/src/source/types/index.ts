@@ -1,3 +1,11 @@
+export interface SearchPage {
+	results: SearchResult[];
+	page: number;
+	pageSize: number;
+	total: number;
+	totalPages: number;
+}
+
 export interface SearchResult {
 	id: string; // e.g. bvid or video id
 	title: string;
@@ -33,6 +41,7 @@ export interface VideoPreview {
 }
 
 export interface ImportedVideo {
+	fullVideo?: boolean;
 	provider: string;
 	sourceId: string;
 	sourceUrl: string;
@@ -46,7 +55,7 @@ export interface ImportedVideo {
 
 export interface VideoSourceProvider {
 	readonly name: string;
-	search(query: string): Promise<SearchResult[]>;
+	search(query: string, page?: number): Promise<SearchPage>;
 	getMetadata(id: string): Promise<VideoMetadata>;
 	getPreview(id: string): Promise<VideoPreview>;
 	importVideo(id: string): Promise<ImportedVideo>;

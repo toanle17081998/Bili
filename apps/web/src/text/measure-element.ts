@@ -22,6 +22,7 @@ export interface ResolvedTextBackground extends TextBackground {
 	offsetX: number;
 	offsetY: number;
 	cornerRadius: number;
+	blur: number;
 }
 
 export interface MeasuredTextElement extends MeasuredTextLayout {
@@ -113,6 +114,7 @@ export function measureTextElement({
 			propertyPath: "background.cornerRadius",
 			localTime,
 		}),
+		blur: bg.blur ?? 0,
 	};
 
 	const visualRect = getTextVisualRect({
@@ -219,6 +221,11 @@ export function buildTextBackgroundFromElement({
 			params: element.params,
 			key: "background.offsetY",
 			fallback: DEFAULTS.text.background.offsetY,
+		}),
+		blur: readNumberParam({
+			params: element.params,
+			key: "background.blur",
+			fallback: 0,
 		}),
 	};
 }

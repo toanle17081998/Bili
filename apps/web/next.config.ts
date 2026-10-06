@@ -13,6 +13,14 @@ const nextConfig: NextConfig = {
 		remotePatterns: [
 			{
 				protocol: "https",
+				hostname: "*.hdslb.com",
+			},
+			{
+				protocol: "http",
+				hostname: "*.hdslb.com",
+			},
+			{
+				protocol: "https",
 				hostname: "plus.unsplash.com",
 			},
 			{
