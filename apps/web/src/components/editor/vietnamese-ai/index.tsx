@@ -49,10 +49,26 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		defaultValue: {
 			enabled: false,
 			color: "#000000",
+			opacity: 75,
+			blur: 12,
+			cornerRadius: 20,
 			paddingX: 120,
 			paddingY: 80,
 		},
 	});
+
+	// Helper to calculate RGBA string from hex color and opacity percentage
+	const getEffectiveBgColor = (hex: string, opacity: number = 75) => {
+		const alpha = Math.max(0, Math.min(100, opacity)) / 100;
+		const cleanHex = hex.replace("#", "");
+		let r = 0, g = 0, b = 0;
+		if (cleanHex.length === 6) {
+			r = parseInt(cleanHex.substring(0, 2), 16) || 0;
+			g = parseInt(cleanHex.substring(2, 4), 16) || 0;
+			b = parseInt(cleanHex.substring(4, 6), 16) || 0;
+		}
+		return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(2)})`;
+	};
 
 	// Subtitle Preview & Edit states
 	const [previewCues, setPreviewCues] = useState<PreviewCue[]>([]);
@@ -65,6 +81,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		const background = { ...subtitleBackground, ...patch };
 		setSubtitleBackground({ value: background });
 		const tracks = editor.scenes.getActiveScene().tracks.overlay;
+		const effectiveColor = getEffectiveBgColor(
+			background.color,
+			background.opacity ?? 75,
+		);
 		editor.timeline.updateElements({
 			updates: tracks.flatMap((track) =>
 				track.type === "text"
@@ -77,10 +97,11 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									params: {
 										...element.params,
 										"background.enabled": background.enabled,
-										"background.color": background.color,
+										"background.color": effectiveColor,
 										"background.paddingX": background.paddingX,
 										"background.paddingY": background.paddingY,
-										"background.cornerRadius": 0,
+										"background.cornerRadius": background.cornerRadius ?? 20,
+										"background.blur": background.blur ?? 12,
 									},
 								},
 							}))
@@ -323,7 +344,17 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					style: {
 						fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
 						color: "#FFFFFF",
-						background: { ...subtitleBackground, cornerRadius: 0 },
+						background: {
+							enabled: subtitleBackground.enabled,
+							color: getEffectiveBgColor(
+								subtitleBackground.color,
+								subtitleBackground.opacity ?? 75,
+							),
+							paddingX: subtitleBackground.paddingX,
+							paddingY: subtitleBackground.paddingY,
+							cornerRadius: subtitleBackground.cornerRadius ?? 20,
+							blur: subtitleBackground.blur ?? 12,
+						},
 					},
 				}));
 				const captionTrack = insertCaptionChunksAsTextTrack({ editor, captions: cues });
