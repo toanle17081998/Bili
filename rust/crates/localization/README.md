@@ -1,6 +1,9 @@
 # Localization timing
 
 Shared Rust policy for source speech windows, fragmented recognition and tempo fitting.
+Speech paragraphs join adjacent phrases within 350 ms, up to 15 seconds per synthesis.
+Caption line breaks do not split the voice. The server assembles one full-length voice
+asset with silence between paragraphs, preserving the source positions on the timeline.
 The web server loads `timing.wasm`; desktop can call the same Rust functions directly.
 Translations retain recognized source timestamps. Long speech is sped up without
 changing pitch; ratios above 2.5 fail rather than dropping words or overlapping clips.

@@ -15,12 +15,12 @@ export async function POST(request: NextRequest) {
 			targetVideoPath === "default" ||
 			!fs.existsSync(targetVideoPath)
 		) {
-			if (fs.existsSync(path.join(downloadsDir, `${projectId}.mp4`))) {
-				targetVideoPath = path.join(downloadsDir, `${projectId}.mp4`);
-			} else if (
-				fs.existsSync(path.join(downloadsDir, `${projectId}.full.mp4`))
-			) {
+			if (fs.existsSync(path.join(downloadsDir, `${projectId}.full.mp4`))) {
 				targetVideoPath = path.join(downloadsDir, `${projectId}.full.mp4`);
+			} else if (
+				fs.existsSync(path.join(downloadsDir, `${projectId}.mp4`))
+			) {
+				targetVideoPath = path.join(downloadsDir, `${projectId}.mp4`);
 			}
 		}
 

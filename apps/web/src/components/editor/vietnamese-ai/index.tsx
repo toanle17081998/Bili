@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { volumeControlParams } from "./volume-control";
 import { SparklesIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@/components/ui/button";
@@ -111,6 +112,29 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	};
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progressStep, setProgressStep] = useState<string | null>(null);
+	const activeScene = useEditor((e) => e.scenes.getActiveSceneOrNull());
+	// Repair projects saved by the former percentage-as-dB implementation once.
+	useEffect(() => {
+		if (!activeScene) return;
+		const key = `ai-volume-units-v2-${projectId}-${activeScene.id}`;
+		const audio = activeScene.tracks.audio.flatMap((track) => track.elements);
+		if (localStorage.getItem(key) || !audio.some((e) => e.name.startsWith("voice-")) ||
+			!audio.some((e) => e.name.startsWith("ai-background"))) return;
+		const tracks = [activeScene.tracks.main, ...activeScene.tracks.overlay, ...activeScene.tracks.audio];
+		const sourceIds = new Set(tracks.flatMap((track) => track.elements.filter((e) => e.type === "video").map((e) => e.mediaId)));
+		const updates: Parameters<typeof editor.timeline.updateElements>[0]["updates"] = [];
+		for (const track of tracks) for (const element of track.elements) {
+			if (element.type === "video" || (element.type === "audio" && element.sourceType === "upload" && sourceIds.has(element.mediaId))) {
+				updates.push({ trackId: track.id, elementId: element.id, patch: { params: { ...element.params, muted: true } } });
+			} else if (element.type === "audio" && (element.name.startsWith("voice-") || element.name.startsWith("ai-background"))) {
+				const percent = (typeof element.params.volume === "number" ? element.params.volume : element.name.startsWith("voice-") ? 1 : 0.2) * 100;
+				updates.push({ trackId: track.id, elementId: element.id, patch: { params: { ...element.params, ...volumeControlParams(percent) } } });
+			}
+		}
+		editor.timeline.updateElements({ updates });
+		localStorage.setItem(key, "true");
+		void editor.project.saveCurrentProject();
+	}, [activeScene, editor, projectId]);
 
 	const applyVolume = (kind: "original" | "voice", value: number) => {
 		const scene = editor.scenes.getActiveScene();
@@ -130,7 +154,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					.map((element) => ({
 						trackId: track.id,
 						elementId: element.id,
-						patch: { params: { ...element.params, volume: value / 100 } },
+						patch: { params: { ...element.params, ...volumeControlParams(value) } },
 					})),
 			),
 		});
@@ -225,7 +249,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		}
 
 		setIsProcessing(true);
-		setProgressStep("Đang tạo giọng đọc thuyết minh & gắn phụ đề lên timeline...");
+		setProgressStep("Đang tạo giọng đọc liền mạch và ghép một track giọng Việt...");
 		const toastId = toast.loading("Đang xử lý Việt hóa video...");
 
 		try {
@@ -284,11 +308,13 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					duration: mediaTimeFromSeconds({ seconds: Math.min(processed.duration, segment.duration) }),
 					startTime: mediaTimeFromSeconds({ seconds: segment.start }),
 				});
-				element.params.volume = (segment.id === "ai-background" ? originalVolume[0] : voiceoverVolume[0]) / 100;
+				Object.assign(element.params, volumeControlParams(segment.id === "ai-background" ? originalVolume[0] : voiceoverVolume[0]));
 				prepared.push(element);
 			}
 
 			const scene = editor.scenes.getActiveScene();
+			const sourceMediaIds = new Set([scene.tracks.main, ...scene.tracks.overlay]
+				.flatMap((track) => track.elements.filter((e) => e.type === "video").map((e) => e.mediaId)));
 			const previousCaptionTrack = localStorage.getItem(`ai-caption-track-${projectId}`);
 			const previousResult = sessionStorage.getItem(`localized_${projectId}`);
 			const previousTexts = new Set<string>(previousResult
@@ -313,10 +339,11 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			// If background audio is separated, mute original video track; otherwise duck it to originalVolume
 			if (localized.backgroundAudioUrl) {
 				editor.timeline.updateElements({
-					updates: [scene.tracks.main, ...scene.tracks.overlay].flatMap((track) =>
-						track.elements.filter((element) => element.type === "video").map((element) => ({
+					updates: [scene.tracks.main, ...scene.tracks.overlay, ...scene.tracks.audio].flatMap((track) =>
+						track.elements.filter((element) => element.type === "video" ||
+							(element.type === "audio" && element.sourceType === "upload" && sourceMediaIds.has(element.mediaId))).map((element) => ({
 							trackId: track.id, elementId: element.id,
-							patch: { params: { ...element.params, volume: 0 } },
+							patch: { params: { ...element.params, muted: true } },
 						})),
 					),
 				});
@@ -330,6 +357,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					placement: { mode: "auto", trackType: "audio" },
 				});
 			}
+			localStorage.setItem(`ai-volume-units-v2-${projectId}-${scene.id}`, "true");
 
 			toast.success("Việt hóa thành công! Đang gắn vào timeline...", {
 				id: toastId,
@@ -394,6 +422,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			</div>
 
 			{/* Controls Form */}
+			<p className="text-[11px] text-neutral-400 leading-relaxed">
+				Phụ đề chia ngắn để dễ đọc. Giọng đọc được gom theo đoạn liền mạch,
+				giữ các khoảng nghỉ và ghép thành một track trên timeline.
+			</p>
 			<div className="flex flex-col gap-4">
 				{/* Voice selector */}
 				<div className="flex flex-col gap-1.5">
@@ -685,7 +717,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						<div className="flex items-center justify-between">
 							<div className="flex items-center gap-2">
 								<span className="text-xs font-semibold text-neutral-200">
-									Kịch bản ({previewCues.length} câu)
+									Phụ đề ({previewCues.length} đoạn)
 								</span>
 								<span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/40 px-1.5 py-0.5 rounded">
 									Tối đa 1-2 dòng

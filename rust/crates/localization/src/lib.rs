@@ -32,3 +32,21 @@ pub extern "C" fn dubbing_merge(start: f64, end: f64, next_start: f64, next_end:
 pub extern "C" fn dubbing_split_word(previous_end: f64, next_start: f64) -> i32 {
     i32::from(next_start - previous_end > 0.8)
 }
+
+/// Caption boundaries are presentation details, not speech boundaries. Group nearby
+/// phrases into bounded paragraphs; preserve longer pauses as separate TTS requests.
+#[unsafe(no_mangle)]
+pub extern "C" fn dubbing_join_speech(start: f64, end: f64, next_start: f64, next_end: f64) -> i32 {
+    i32::from([start, end, next_start, next_end].iter().all(|v| v.is_finite())
+        && start >= 0.0 && end > start && next_end > next_start
+        && next_start >= end - 0.011 && next_start - end <= 0.35
+        && next_end - start <= 15.0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dubbing_silence(previous_end: f64, next_start: f64) -> f64 {
+    if !previous_end.is_finite() || !next_start.is_finite()
+        || previous_end < 0.0 || next_start < previous_end - 0.0001 {
+        f64::NAN
+    } else { (((next_start - previous_end) * 48000.0).round() / 48000.0).max(0.0) }
+}

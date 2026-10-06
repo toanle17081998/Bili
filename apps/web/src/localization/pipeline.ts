@@ -250,12 +250,19 @@ export class LocalizationPipeline {
 			subtitlesToProcess = preview.subtitles;
 		}
 
-		// 3. Generate Vietnamese TTS for each subtitle cue
+		// 3. Synthesize paragraphs independently of short on-screen caption cues.
 		onProgress?.("Tạo giọng đọc thuyết minh tiếng Việt...", 70);
 		const voiceovers: VoiceSegment[] = [];
 		const subtitles: SubtitleSegment[] = subtitlesToProcess;
 		const timing = await loadDubbingTiming();
-		const speechSegments = translations.map((item) => ({ start: item.sourceStart, end: item.sourceEnd, text: item.vietnameseText }));
+		const speechSegments: TranscriptSegment[] = [];
+		for (const item of translations) {
+			const previous = speechSegments.at(-1);
+			if (previous && timing.dubbing_join_speech(previous.start, previous.end, item.sourceStart, item.sourceEnd)) {
+				previous.end = item.sourceEnd;
+				previous.text += ` ${item.vietnameseText}`;
+			} else speechSegments.push({ start: item.sourceStart, end: item.sourceEnd, text: item.vietnameseText });
+		}
 		for (let i = 0; i < speechSegments.length; i++) {
 			const item = speechSegments[i];
 			const end = timing.dubbing_slot_end(item.start, item.end, speechSegments[i + 1]?.start ?? probe.duration, probe.duration);
@@ -292,6 +299,35 @@ export class LocalizationPipeline {
 
 		}
 
+		// Assemble one timeline asset. Silence between paragraphs retains their source
+		// timestamps; concatenating speech files directly would shift subsequent narration.
+		const combinedOut = path.join(runDir, "voice-main.wav");
+		const inputs = voiceovers.flatMap((segment) => ["-i", new URL(segment.audioUrl, "http://localhost").searchParams.get("file")!]);
+		const filters: string[] = [];
+		const labels: string[] = [];
+		let cursor = 0;
+		for (const [i, segment] of voiceovers.entries()) {
+			const silence = timing.dubbing_silence(cursor, segment.start);
+			if (!Number.isFinite(silence)) throw new Error("Invalid dubbing sequence");
+			if (silence > 0) {
+				filters.push(`anullsrc=r=48000:cl=mono,atrim=duration=${silence.toFixed(9)},asetpts=PTS-STARTPTS[s${i}]`);
+				labels.push(`[s${i}]`);
+			}
+			filters.push(`[${i}:a]aresample=48000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS[v${i}]`);
+			labels.push(`[v${i}]`);
+			cursor = segment.end;
+		}
+		if (!labels.length) throw new Error("No Vietnamese speech to synthesize");
+		filters.push(`${labels.join("")}concat=n=${labels.length}:v=0:a=1,apad,atrim=duration=${probe.duration}[voice]`);
+		await FFmpegService.runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[voice]", "-c:a", "pcm_s16le", combinedOut]);
+		const combined = await FFmpegService.probeVideo(combinedOut);
+		await fs.writeFile(path.join(runDir, "dubbing-plan.json"), JSON.stringify(voiceovers, null, 2));
+		const combinedVoice: VoiceSegment = {
+			id: "voice-main", start: 0, end: combined.duration, duration: combined.duration,
+			audioUrl: `/api/media/stream?file=${encodeURIComponent(combinedOut)}`,
+			text: speechSegments.map((segment) => segment.text).join("\n"),
+		};
+
 		onProgress?.("Chuẩn bị hoàn tất timeline...", 100);
 
 		const result: LocalizedVideoProject = {
@@ -311,7 +347,7 @@ export class LocalizationPipeline {
 			backgroundAudioUrl: `/api/media/stream?file=${encodeURIComponent(stems.background)}`,
 			transcript,
 			translations,
-			voiceovers,
+			voiceovers: [combinedVoice],
 			subtitles,
 		};
 

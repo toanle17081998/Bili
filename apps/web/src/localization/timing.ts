@@ -6,6 +6,8 @@ interface TimingExports {
 	dubbing_tempo(audio: number, slot: number): number;
 	dubbing_merge(start: number, end: number, nextStart: number, nextEnd: number): number;
 	dubbing_split_word(previousEnd: number, nextStart: number): number;
+	dubbing_join_speech(start: number, end: number, nextStart: number, nextEnd: number): number;
+	dubbing_silence(previousEnd: number, nextStart: number): number;
 }
 
 let modulePromise: Promise<TimingExports> | undefined;

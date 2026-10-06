@@ -26,3 +26,15 @@ test("Rust groups short fragments without bridging long pauses", async () => {
 	assert.equal(rust.dubbing_split_word(90, 105), 1);
 	assert.equal(rust.dubbing_split_word(90, 90.2), 0);
 });
+
+test("speech grouping ignores caption splits but preserves pauses and bounded paragraphs", async () => {
+	const rust = await loadDubbingTiming();
+	assert.equal(rust.dubbing_join_speech(2, 4, 4, 6), 1);
+	assert.equal(rust.dubbing_join_speech(2, 4, 4.3, 6), 1);
+	assert.equal(rust.dubbing_join_speech(2, 4, 5, 6), 0);
+	assert.equal(rust.dubbing_join_speech(2, 14, 14, 18), 0);
+	assert.equal(rust.dubbing_join_speech(2, 4, 3, 6), 0);
+	assert.equal(rust.dubbing_silence(6, 8), 2);
+	assert.equal(rust.dubbing_silence(100, 100.00000000000001), 0);
+	assert.ok(Number.isNaN(rust.dubbing_silence(8, 6)));
+});
