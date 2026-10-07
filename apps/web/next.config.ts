@@ -9,6 +9,13 @@ const nextConfig: NextConfig = {
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,
 	output: "standalone",
+	outputFileTracingIncludes: {
+		"/api/localization/process": ["../../rust/crates/localization/timing.wasm"],
+		"/api/social-copy": ["../../rust/social-copy/social-copy.wasm"],
+		"/api/media/watermark-removals": [
+			"../../rust/crates/watermark/watermark.wasm",
+		],
+	},
 	images: {
 		remotePatterns: [
 			{

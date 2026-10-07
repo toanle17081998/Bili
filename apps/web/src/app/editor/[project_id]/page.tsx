@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import {
 	ResizablePanelGroup,
 	ResizablePanel,
@@ -83,7 +83,10 @@ function DegradedRendererBanner() {
 }
 
 function EditorLayout({ projectId }: { projectId: string }) {
-	const [toolTab, setToolTab] = useState("video");
+	const searchParams = useSearchParams();
+	const [toolTab, setToolTab] = useState(() =>
+		searchParams.get("imported") === "true" ? "ai" : "video",
+	);
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
 	const activeScene = useEditor((editor) =>

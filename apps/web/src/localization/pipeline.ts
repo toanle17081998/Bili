@@ -14,9 +14,10 @@ import {
 	OpenAILLMProvider,
 	FreeTranslateLLMProvider,
 } from "@/providers/llm";
-import type { TTSProvider } from "@/providers/tts/edge-tts";
-import { EdgeTTSProvider } from "@/providers/tts/edge-tts";
+import type { TTSProvider } from "@/providers/tts/types";
+import { createDefaultTTSProvider } from "@/providers/tts/service";
 import { separateVocals } from "@/media/vocal-separation";
+import { hasOpenAILLMConfig } from "@/providers/openai-compatible";
 import { loadDubbingTiming } from "./timing";
 import { splitIntoShortSubtitles } from "./split";
 import {
@@ -60,9 +61,9 @@ export class LocalizationPipeline {
 		// Auto-select STT provider
 		if (transcriptionProvider) {
 			this.transcriptionProvider = transcriptionProvider;
-		} else if (process.env.GEMINI_API_KEY) {
+		} else if (process.env.GEMINI_API_KEY?.trim()) {
 			this.transcriptionProvider = new GeminiTranscriptionProvider();
-		} else if (process.env.OPENAI_API_KEY) {
+		} else if (process.env.OPENAI_API_KEY?.trim()) {
 			this.transcriptionProvider = new WhisperTranscriptionProvider();
 		} else {
 			this.transcriptionProvider = new FasterWhisperTranscriptionProvider();
@@ -71,15 +72,15 @@ export class LocalizationPipeline {
 		// Auto-select LLM/Translation provider
 		if (llmProvider) {
 			this.llmProvider = llmProvider;
-		} else if (process.env.GEMINI_API_KEY) {
+		} else if (process.env.GEMINI_API_KEY?.trim()) {
 			this.llmProvider = new GeminiLLMProvider();
-		} else if (process.env.OPENAI_API_KEY) {
+		} else if (hasOpenAILLMConfig()) {
 			this.llmProvider = new OpenAILLMProvider();
 		} else {
 			this.llmProvider = new FreeTranslateLLMProvider();
 		}
 
-		this.ttsProvider = ttsProvider || new EdgeTTSProvider();
+		this.ttsProvider = ttsProvider || createDefaultTTSProvider();
 		this.vocalSeparator = vocalSeparator;
 	}
 

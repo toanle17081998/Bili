@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { volumeControlParams } from "./volume-control";
 import { SparklesIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { ChevronRight, Loader2, Mic, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -24,6 +25,10 @@ import { buildElementFromMedia } from "@/timeline/element-utils";
 import { mediaTimeFromSeconds } from "@/wasm";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useLocalStorage } from "@/services/storage/use-local-storage";
+import { VoicePickerDialog } from "./voice-picker-dialog";
+import { VIENEU_PRESET_VOICES } from "@/providers/tts/voices";
+import type { TTSVoice } from "@/providers/tts/types";
+import { cn } from "@/utils/ui";
 
 interface Props {
 	projectId: string;
@@ -41,7 +46,86 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
-	const [voice, setVoice] = useState("vi-VN-HoaiMyNeural");
+	const [voice, setVoice] = useState(() => {
+		if (typeof window !== "undefined") {
+			const saved = localStorage.getItem(`ai-selected-voice-${projectId}`);
+			if (saved) return saved;
+		}
+		return "Hải Đăng";
+	});
+
+	const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
+	const [isPanelAudioPlaying, setIsPanelAudioPlaying] = useState(false);
+	const [isPanelAudioLoading, setIsPanelAudioLoading] = useState(false);
+	const panelAudioRef = useRef<HTMLAudioElement | null>(null);
+
+	const currentVoiceMeta = useMemo(() => {
+		const found = VIENEU_PRESET_VOICES.find(
+			(v) => v.name === voice || v.id === voice,
+		);
+		if (found) return found;
+		if (voice === "vi-VN-HoaiMyNeural") {
+			return VIENEU_PRESET_VOICES.find((v) => v.name === "Ngọc Huyền");
+		}
+		if (voice === "vi-VN-NamMinhNeural") {
+			return VIENEU_PRESET_VOICES.find((v) => v.name === "Hải Đăng");
+		}
+		return VIENEU_PRESET_VOICES.find((v) => v.name === "Hải Đăng");
+	}, [voice]);
+
+	const stopPanelAudio = () => {
+		if (panelAudioRef.current) {
+			panelAudioRef.current.pause();
+			panelAudioRef.current.currentTime = 0;
+			panelAudioRef.current = null;
+		}
+		setIsPanelAudioPlaying(false);
+		setIsPanelAudioLoading(false);
+	};
+
+	useEffect(() => {
+		return () => {
+			stopPanelAudio();
+		};
+	}, []);
+
+	const togglePanelVoicePreview = async () => {
+		if (isPanelAudioPlaying) {
+			stopPanelAudio();
+			return;
+		}
+
+		stopPanelAudio();
+		const voiceName = currentVoiceMeta?.name || voice || "Hải Đăng";
+		setIsPanelAudioLoading(true);
+
+		try {
+			const audio = new Audio(
+				`/api/tts/preview?voice=${encodeURIComponent(voiceName)}`,
+			);
+			panelAudioRef.current = audio;
+			audio.oncanplay = () => setIsPanelAudioLoading(false);
+			audio.onplay = () => {
+				setIsPanelAudioLoading(false);
+				setIsPanelAudioPlaying(true);
+			};
+			audio.onended = () => {
+				setIsPanelAudioPlaying(false);
+				panelAudioRef.current = null;
+			};
+			audio.onerror = () => {
+				setIsPanelAudioLoading(false);
+				setIsPanelAudioPlaying(false);
+				panelAudioRef.current = null;
+				toast.error(`Không thể phát mẫu thử giọng "${voiceName}"`);
+			};
+			await audio.play();
+		} catch {
+			setIsPanelAudioLoading(false);
+			setIsPanelAudioPlaying(false);
+			toast.error(`Lỗi khi phát mẫu thử giọng "${voiceName}"`);
+		}
+	};
 	const [originalVolume, setOriginalVolume] = useState([20]); // 20%
 	const [voiceoverVolume, setVoiceoverVolume] = useState([100]); // 100%
 	const [subtitleStyle, setSubtitleStyle] = useState("bold");
@@ -428,23 +512,131 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			</p>
 			<div className="flex flex-col gap-4">
 				{/* Voice selector */}
-				<div className="flex flex-col gap-1.5">
-					<Label className="text-xs text-neutral-400">
-						Giọng đọc thuyết minh
-					</Label>
-					<Select value={voice} onValueChange={setVoice}>
-						<SelectTrigger className="bg-neutral-950 border-neutral-800 text-xs">
-							<SelectValue placeholder="Chọn giọng" />
-						</SelectTrigger>
-						<SelectContent className="bg-neutral-900 border-neutral-800 text-xs">
-							<SelectItem value="vi-VN-HoaiMyNeural">
-								Hoài My (Nữ - Truyền cảm)
-							</SelectItem>
-							<SelectItem value="vi-VN-NamMinhNeural">
-								Nam Minh (Nam - Trầm ấm)
-							</SelectItem>
-						</SelectContent>
-					</Select>
+				<div className="flex flex-col gap-2">
+					<div className="flex items-center justify-between">
+						<Label className="text-xs text-neutral-400">
+							Giọng đọc thuyết minh
+						</Label>
+						<span className="text-[11px] font-mono text-rose-400">
+							25 giọng TTS
+						</span>
+					</div>
+
+					{/* Selected Voice Card */}
+					<div
+						onClick={() => {
+							stopPanelAudio();
+							setIsVoicePickerOpen(true);
+						}}
+						className="group flex flex-col gap-2.5 p-3 rounded-lg border border-neutral-800 bg-neutral-950/80 hover:border-neutral-700 hover:bg-neutral-900/60 transition cursor-pointer select-none"
+					>
+						<div className="flex items-start justify-between gap-2">
+							<div className="flex items-center gap-2.5 min-w-0">
+								<div className="size-8 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+									<Mic className="size-4" />
+								</div>
+								<div className="flex flex-col min-w-0">
+									<div className="flex items-center gap-1.5 flex-wrap">
+										<span className="font-semibold text-xs text-neutral-100 group-hover:text-white truncate">
+											{currentVoiceMeta?.name || voice}
+										</span>
+										{currentVoiceMeta?.featured && currentVoiceMeta.featured <= 10 && (
+											<span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+												⭐ Nổi bật #{currentVoiceMeta.featured}
+											</span>
+										)}
+									</div>
+									<span className="text-[10px] text-neutral-400 truncate">
+										{currentVoiceMeta?.description || "Giọng đọc AI tự nhiên"}
+									</span>
+								</div>
+							</div>
+
+							{/* Inline Quick Preview Button */}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={isProcessing}
+								onClick={(e) => {
+									e.stopPropagation();
+									togglePanelVoicePreview();
+								}}
+								className={cn(
+									"h-7 px-2 text-[11px] gap-1 shrink-0 border transition",
+									isPanelAudioPlaying
+										? "bg-rose-500 text-white border-rose-400 hover:bg-rose-600"
+										: isPanelAudioLoading
+											? "bg-neutral-800 text-neutral-300 border-neutral-700"
+											: "bg-neutral-900 border-neutral-800 text-neutral-200 hover:bg-neutral-800 hover:text-white",
+								)}
+								title="Nghe thử giọng này"
+							>
+								{isPanelAudioLoading ? (
+									<Loader2 className="size-3 animate-spin text-rose-400" />
+								) : isPanelAudioPlaying ? (
+									<>
+										<Pause className="size-3 fill-white" />
+										<span>Dừng</span>
+									</>
+								) : (
+									<>
+										<Play className="size-3 fill-rose-400 text-rose-400" />
+										<span>Nghe thử</span>
+									</>
+								)}
+							</Button>
+						</div>
+
+						{/* Tags + Change voice button */}
+						<div className="flex items-center justify-between gap-1.5 pt-2 border-t border-neutral-800/80">
+							<div className="flex items-center gap-1 flex-wrap">
+								{currentVoiceMeta?.gender && (
+									<span
+										className={cn(
+											"text-[9px] px-1.5 py-0.5 rounded font-medium border",
+											currentVoiceMeta.gender === "female"
+												? "bg-rose-950/50 text-rose-300 border-rose-800/40"
+												: "bg-blue-950/50 text-blue-300 border-blue-800/40",
+										)}
+									>
+										{currentVoiceMeta.gender === "female" ? "Nữ" : "Nam"}
+									</span>
+								)}
+								{currentVoiceMeta?.region && (
+									<span className="text-[9px] px-1.5 py-0.5 rounded font-medium bg-neutral-900 text-neutral-300 border border-neutral-800">
+										Miền {currentVoiceMeta.region}
+									</span>
+								)}
+								{currentVoiceMeta?.style && (
+									<span className="text-[9px] px-1.5 py-0.5 rounded font-medium bg-neutral-900/80 text-neutral-400 border border-neutral-800/60">
+										{currentVoiceMeta.style}
+									</span>
+								)}
+							</div>
+
+							<div className="flex items-center text-[11px] text-rose-400 group-hover:text-rose-300 font-medium gap-0.5">
+								<span>Đổi giọng</span>
+								<ChevronRight className="size-3" />
+							</div>
+						</div>
+					</div>
+
+					<VoicePickerDialog
+						open={isVoicePickerOpen}
+						onOpenChange={setIsVoicePickerOpen}
+						selectedVoice={voice}
+						onSelectVoice={(chosen) => {
+							const chosenName = chosen.name || chosen.id;
+							setVoice(chosenName);
+							if (typeof window !== "undefined") {
+								localStorage.setItem(`ai-selected-voice-${projectId}`, chosenName);
+							}
+							setIsVoicePickerOpen(false);
+							stopPanelAudio();
+							toast.success(`Đã chọn giọng đọc "${chosenName}"`);
+						}}
+					/>
 				</div>
 
 				{/* Original Volume */}
