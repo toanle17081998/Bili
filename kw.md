@@ -101,3 +101,11 @@ Nếu mục tiêu của bạn là tìm những video có khả năng chuyển th
 乐高越来越难
 
 Đặc biệt “乐高黑科技”, “乐高机关”, “乐高解压”, “乐高极限测试” có thể mở ra khá nhiều ý tưởng khác với việc chỉ search 乐高挑战.
+
+
+
+Ngày 1–7	3 video/ngày	20–35 giây	Test format
+Ngày 8–30	3–5 video/ngày	25–45 giây	Tìm format thắng
+Tháng 2	2–4 video/ngày	30–60 giây	Scale format thắng
+Khi kênh ổn	2–3 Shorts/ngày	30–60 giây	Chất lượng > số lượng
+Sau đó	+ 1 video dài/tuần	4–8 phút	YouTube long-form
