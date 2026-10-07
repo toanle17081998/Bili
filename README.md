@@ -69,6 +69,23 @@ The application will be available at [http://localhost:3000](http://localhost:30
 
 The `.env.example` has sensible defaults that match the Docker Compose config — it should work out of the box.
 
+### Corporate network proxy
+
+If outbound requests (including Bilibili search) time out on a restricted network,
+set `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` in `apps/web/.env.local` using the
+values for your network. Keep `localhost,127.0.0.1,::1` in `NO_PROXY` so local
+services remain direct. The dev launcher enables Node's `--use-env-proxy` support
+when a proxy is configured; use a Node version that supports this flag and restart
+`bun run dev:web` after changing proxy settings.
+
+### Video import tools
+
+Bilibili imports require `yt-dlp` and `ffmpeg` on the server's `PATH`. If they are
+installed elsewhere, set `YTDLP_PATH` to the downloader executable and
+`FFMPEG_PATH` to the FFmpeg executable or its directory in `apps/web/.env.local`.
+These are machine-specific settings; do not copy another machine's installation
+paths. Restart `bun run dev:web` after changing them.
+
 ### Desktop setup
 
 Desktop is opt-in. If you're only working on the web app, skip this entirely.

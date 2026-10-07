@@ -14,21 +14,14 @@ export class BilibiliProvider implements VideoSourceProvider {
 	readonly name = "bilibili";
 	private downloadDir: string;
 	private ytdlpPath: string;
-	private ffmpegDir: string;
+	private ffmpegDir?: string;
 
 	constructor(downloadDir?: string) {
 		this.downloadDir =
 			downloadDir || path.join(process.cwd(), ".local_storage", "downloads");
 
-		this.ytdlpPath = path.join(
-			process.env.LOCALAPPDATA || "C:\\Users\\Admin\\AppData\\Local",
-			"Microsoft\\WinGet\\Packages\\yt-dlp.yt-dlp_Microsoft.Winget.Source_8wekyb3d8bbwe\\yt-dlp.exe",
-		);
-
-		this.ffmpegDir = path.join(
-			process.env.LOCALAPPDATA || "C:\\Users\\Admin\\AppData\\Local",
-			"Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build\\bin",
-		);
+		this.ytdlpPath = process.env.YTDLP_PATH || "yt-dlp";
+		this.ffmpegDir = process.env.FFMPEG_PATH || undefined;
 	}
 
 	async search(query: string, page = 1): Promise<SearchPage> {
@@ -177,15 +170,16 @@ export class BilibiliProvider implements VideoSourceProvider {
 			const videoUrl = `https://www.bilibili.com/video/${id}`;
 			await new Promise<void>((resolve, reject) => {
 				const proc = spawn(this.ytdlpPath, [
-					"--ffmpeg-location",
-					this.ffmpegDir,
+					...(this.ffmpegDir ? ["--ffmpeg-location", this.ffmpegDir] : []),
+					// Prefer H.264 because HEVC cannot be decoded by all supported browsers.
 					"-f",
-					"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+					"bv*[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]/best[vcodec^=avc]",
 					"-o",
 					downloadFile,
 					videoUrl,
 				]);
 
+				proc.stdout.resume();
 				let stderr = "";
 				proc.stderr.on("data", (d) => (stderr += d.toString()));
 				proc.on("close", (code) => {
@@ -198,6 +192,14 @@ export class BilibiliProvider implements VideoSourceProvider {
 						);
 				});
 				proc.on("error", reject);
+			}).catch((error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") {
+					throw new Error(
+						"yt-dlp was not found. Install yt-dlp on PATH or set YTDLP_PATH in apps/web/.env.local.",
+						{ cause: error },
+					);
+				}
+				throw error;
 			});
 			const downloaded = await fs.stat(downloadFile);
 			if (!downloaded.size) throw new Error("Downloaded video is empty");
