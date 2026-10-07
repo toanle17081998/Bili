@@ -21,8 +21,12 @@ import { insertCaptionChunksAsTextTrack } from "@/subtitles/insert";
 import type { SubtitleCue } from "@/subtitles/types";
 import { ExportButton } from "@/components/editor/export-button";
 import { processMediaAssets } from "@/media/processing";
-import { buildElementFromMedia } from "@/timeline/element-utils";
-import { mediaTimeFromSeconds } from "@/wasm";
+import {
+	buildElementFromMedia,
+	buildGraphicElement,
+} from "@/timeline/element-utils";
+import { InsertElementCommand } from "@/commands";
+import { mediaTimeFromSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useLocalStorage } from "@/services/storage/use-local-storage";
 import { VoicePickerDialog } from "./voice-picker-dialog";
@@ -40,6 +44,51 @@ interface PreviewCue {
 	end: number;
 	text: string;
 }
+
+const SUBTITLE_BG_PRESETS = [
+	{
+		id: "delogo",
+		name: "🌫️ Xóa text đằng sau (Chuẩn xóa logo)",
+		desc: "Độ che phủ 95%, viền mờ 24px, che sạch 100% chữ gốc",
+		config: {
+			enabled: true,
+			color: "#000000",
+			opacity: 95,
+			blur: 24,
+			cornerRadius: 16,
+			paddingX: 240,
+			paddingY: 90,
+		},
+	},
+	{
+		id: "banner",
+		name: "🎬 Dải mờ ngang đáy (TikTok Banner)",
+		desc: "Trải rộng ngang che trọn dải phụ đề đáy video",
+		config: {
+			enabled: true,
+			color: "#050505",
+			opacity: 92,
+			blur: 30,
+			cornerRadius: 4,
+			paddingX: 600,
+			paddingY: 100,
+		},
+	},
+	{
+		id: "compact",
+		name: "🔲 Hộp mờ tối giản",
+		desc: "Ôm gọn phụ đề với viền mờ tự nhiên",
+		config: {
+			enabled: true,
+			color: "#121212",
+			opacity: 85,
+			blur: 14,
+			cornerRadius: 20,
+			paddingX: 120,
+			paddingY: 70,
+		},
+	},
+] as const;
 
 export function VietnameseAiPanel({ projectId }: Props) {
 	const editor = useEditor();
@@ -132,18 +181,18 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	const [subtitleBackground, setSubtitleBackground] = useLocalStorage({
 		key: `subtitle-background-${projectId}`,
 		defaultValue: {
-			enabled: false,
+			enabled: true,
 			color: "#000000",
-			opacity: 75,
-			blur: 12,
-			cornerRadius: 20,
-			paddingX: 120,
-			paddingY: 80,
+			opacity: 95,
+			blur: 24,
+			cornerRadius: 16,
+			paddingX: 240,
+			paddingY: 90,
 		},
 	});
 
 	// Helper to calculate RGBA string from hex color and opacity percentage
-	const getEffectiveBgColor = (hex: string, opacity: number = 75) => {
+	const getEffectiveBgColor = (hex: string, opacity: number = 95) => {
 		const alpha = Math.max(0, Math.min(100, opacity)) / 100;
 		const cleanHex = hex.replace("#", "");
 		let r = 0, g = 0, b = 0;
@@ -165,16 +214,27 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	) => {
 		const background = { ...subtitleBackground, ...patch };
 		setSubtitleBackground({ value: background });
-		const tracks = editor.scenes.getActiveScene().tracks.overlay;
+		const scene = editor.scenes.getActiveSceneOrNull();
+		if (!scene) return;
+		const tracks = [scene.tracks.main, ...scene.tracks.overlay];
 		const effectiveColor = getEffectiveBgColor(
 			background.color,
-			background.opacity ?? 75,
+			background.opacity ?? 95,
 		);
+		const savedCaptionTrack = localStorage.getItem(
+			`ai-caption-track-${projectId}`,
+		);
+
 		editor.timeline.updateElements({
 			updates: tracks.flatMap((track) =>
 				track.type === "text"
 					? track.elements
-							.filter((element) => /^Caption \d+$/.test(element.name))
+							.filter(
+								(element) =>
+									track.id === savedCaptionTrack ||
+									/^Caption(\s+\d+)?$/i.test(element.name) ||
+									element.name.toLowerCase().startsWith("caption"),
+							)
 							.map((element) => ({
 								trackId: track.id,
 								elementId: element.id,
@@ -185,14 +245,51 @@ export function VietnameseAiPanel({ projectId }: Props) {
 										"background.color": effectiveColor,
 										"background.paddingX": background.paddingX,
 										"background.paddingY": background.paddingY,
-										"background.cornerRadius": background.cornerRadius ?? 20,
-										"background.blur": background.blur ?? 12,
+										"background.cornerRadius":
+											background.cornerRadius ?? 16,
+										"background.blur": background.blur ?? 24,
 									},
 								},
 							}))
 					: [],
 			),
 		});
+		void editor.project.saveCurrentProject();
+	};
+
+	const addSubtitleCoverStrip = async () => {
+		const duration = editor.timeline.getTotalDuration();
+		if (duration <= 0) {
+			toast.error("Chưa có video trên timeline.");
+			return;
+		}
+		const element = buildGraphicElement({
+			definitionId: "rectangle",
+			name: "Dải che mờ phụ đề gốc",
+			startTime: ZERO_MEDIA_TIME,
+			params: {
+				fill: "rgba(0, 0, 0, 0.95)",
+				strokeWidth: 0,
+				"transform.positionY": Math.round(canvasSize.height * 0.38),
+				"transform.scaleX": 0.92,
+				"transform.scaleY": 0.12,
+			},
+		});
+		const command = new InsertElementCommand({
+			element: { ...element, duration },
+			placement: { mode: "auto", trackType: "graphic", insertIndex: 0 },
+		});
+		editor.command.execute({ command });
+		const trackId = command.getTrackId();
+		if (trackId) {
+			editor.selection.setSelectedElements({
+				elements: [{ trackId, elementId: command.getElementId() }],
+			});
+		}
+		await editor.project.saveCurrentProject();
+		toast.success(
+			"Đã thêm dải che mờ phụ đề gốc! Bạn có thể kéo chỉnh vị trí hoặc kích thước trên preview.",
+		);
 	};
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progressStep, setProgressStep] = useState<string | null>(null);
@@ -460,12 +557,12 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							enabled: subtitleBackground.enabled,
 							color: getEffectiveBgColor(
 								subtitleBackground.color,
-								subtitleBackground.opacity ?? 75,
+								subtitleBackground.opacity ?? 95,
 							),
 							paddingX: subtitleBackground.paddingX,
 							paddingY: subtitleBackground.paddingY,
-							cornerRadius: subtitleBackground.cornerRadius ?? 20,
-							blur: subtitleBackground.blur ?? 12,
+							cornerRadius: subtitleBackground.cornerRadius ?? 16,
+							blur: subtitleBackground.blur ?? 24,
 						},
 					},
 				}));
@@ -695,76 +792,115 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							<SelectItem value="minimal">Tối giản (Minimal)</SelectItem>
 						</SelectContent>
 					</Select>
-					<div className="mt-2 flex items-center gap-2">
-						<Checkbox
-							id="subtitle-background"
-							checked={subtitleBackground.enabled}
-							disabled={isProcessing}
-							onCheckedChange={(checked) =>
-								updateSubtitleBackground({ enabled: checked === true })
-							}
-						/>
-						<Label
-							htmlFor="subtitle-background"
-							className="cursor-pointer text-xs"
-						>
-							Bật nền phụ đề (Hỗ trợ làm mờ & trong suốt)
-						</Label>
+					<div className="mt-2 flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<Checkbox
+								id="subtitle-background"
+								checked={subtitleBackground.enabled}
+								disabled={isProcessing}
+								onCheckedChange={(checked) =>
+									updateSubtitleBackground({ enabled: checked === true })
+								}
+							/>
+							<Label
+								htmlFor="subtitle-background"
+								className="cursor-pointer text-xs font-medium"
+							>
+								Nền phụ đề làm mờ (Xóa text / logo gốc)
+							</Label>
+						</div>
 					</div>
+
 					{subtitleBackground.enabled && (
-						<div className="flex flex-col gap-3 rounded border border-neutral-700 p-3">
-							<div className="flex items-center justify-between">
-								<Label htmlFor="subtitle-background-color" className="text-xs">
-									Màu nền phụ đề
-								</Label>
-								<input
-									id="subtitle-background-color"
-									type="color"
-									value={subtitleBackground.color}
-									disabled={isProcessing}
-									onChange={(event) =>
-										updateSubtitleBackground({ color: event.target.value })
-									}
-									className="h-7 w-10 cursor-pointer rounded border border-neutral-700 bg-transparent"
-								/>
+						<div className="flex flex-col gap-3.5 rounded-lg border border-neutral-700 bg-neutral-950/60 p-3">
+							{/* Quick Presets */}
+							<div className="flex flex-col gap-1.5">
+								<span className="text-[11px] font-semibold text-neutral-300">
+									Kiểu làm mờ (Presets nhanh)
+								</span>
+								<div className="grid grid-cols-1 gap-1.5">
+									{SUBTITLE_BG_PRESETS.map((preset) => (
+										<button
+											key={preset.id}
+											type="button"
+											disabled={isProcessing}
+											onClick={() => updateSubtitleBackground(preset.config)}
+											className="flex flex-col text-left px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/80 hover:bg-neutral-800 hover:border-neutral-700 transition"
+										>
+											<span className="text-xs font-medium text-neutral-100">
+												{preset.name}
+											</span>
+											<span className="text-[10px] text-neutral-400">
+												{preset.desc}
+											</span>
+										</button>
+									))}
+								</div>
 							</div>
 
-							{/* Opacity / Trong suốt */}
+							<div className="flex items-center justify-between border-t border-neutral-800/80 pt-2.5">
+								<Label
+									htmlFor="subtitle-background-color"
+									className="text-xs text-neutral-300"
+								>
+									Màu sắc nền
+								</Label>
+								<div className="flex items-center gap-2">
+									<input
+										id="subtitle-background-color"
+										type="color"
+										value={subtitleBackground.color}
+										disabled={isProcessing}
+										onChange={(event) =>
+											updateSubtitleBackground({ color: event.target.value })
+										}
+										className="h-7 w-9 cursor-pointer rounded border border-neutral-700 bg-transparent"
+									/>
+									<span className="font-mono text-[11px] text-neutral-400">
+										{subtitleBackground.color}
+									</span>
+								</div>
+							</div>
+
+							{/* Opacity / Độ đậm che phủ */}
 							<div className="flex flex-col gap-1">
 								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-opacity" className="text-xs">
-										Độ mờ trong suốt (Opacity)
+									<Label htmlFor="subtitle-opacity" className="text-xs text-neutral-300">
+										Độ che phủ (Opacity)
 									</Label>
 									<span className="font-mono text-neutral-400">
-										{subtitleBackground.opacity ?? 75}%
+										{subtitleBackground.opacity ?? 95}%
 									</span>
 								</div>
 								<input
 									type="range"
 									className="w-full accent-rose-500"
 									id="subtitle-opacity"
-									aria-label="Độ mờ trong suốt"
-									min={10}
+									aria-label="Độ che phủ"
+									min={40}
 									max={100}
-									step={5}
+									step={1}
 									disabled={isProcessing}
-									value={subtitleBackground.opacity ?? 75}
+									value={subtitleBackground.opacity ?? 95}
 									onChange={(event) =>
 										updateSubtitleBackground({
 											opacity: Number(event.target.value),
 										})
 									}
 								/>
+								<span className="text-[10px] text-neutral-500">
+									90–100% giúp che sạch chữ và logo gốc phía sau.
+								</span>
 							</div>
 
-							{/* Blur / Nhòe mờ */}
+							{/* Blur / Nhòe mờ viền */}
 							<div className="flex flex-col gap-1">
 								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-blur" className="text-xs">
+									<Label htmlFor="subtitle-blur" className="text-xs text-neutral-300">
 										Độ nhòe mờ viền (Blur)
 									</Label>
 									<span className="font-mono text-neutral-400">
-										{subtitleBackground.blur ?? 12}px
+										{subtitleBackground.blur ?? 24}px
 									</span>
 								</div>
 								<input
@@ -773,26 +909,32 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									id="subtitle-blur"
 									aria-label="Độ nhòe mờ viền"
 									min={0}
-									max={40}
+									max={60}
 									step={2}
 									disabled={isProcessing}
-									value={subtitleBackground.blur ?? 12}
+									value={subtitleBackground.blur ?? 24}
 									onChange={(event) =>
 										updateSubtitleBackground({
 											blur: Number(event.target.value),
 										})
 									}
 								/>
+								<span className="text-[10px] text-neutral-500">
+									Làm mờ chuyển tiếp viền mềm mại như tính năng xóa logo.
+								</span>
 							</div>
 
 							{/* Corner Radius */}
 							<div className="flex flex-col gap-1">
 								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-corner-radius" className="text-xs">
+									<Label
+										htmlFor="subtitle-corner-radius"
+										className="text-xs text-neutral-300"
+									>
 										Bo tròn góc
 									</Label>
 									<span className="font-mono text-neutral-400">
-										{subtitleBackground.cornerRadius ?? 20}%
+										{subtitleBackground.cornerRadius ?? 16}%
 									</span>
 								</div>
 								<input
@@ -804,7 +946,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									max={50}
 									step={2}
 									disabled={isProcessing}
-									value={subtitleBackground.cornerRadius ?? 20}
+									value={subtitleBackground.cornerRadius ?? 16}
 									onChange={(event) =>
 										updateSubtitleBackground({
 											cornerRadius: Number(event.target.value),
@@ -816,11 +958,14 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							{/* Padding X */}
 							<div className="flex flex-col gap-1">
 								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-padding-x" className="text-xs">
-										Mở rộng nền ngang
+									<Label
+										htmlFor="subtitle-padding-x"
+										className="text-xs text-neutral-300"
+									>
+										Mở rộng nền ngang (Padding X)
 									</Label>
 									<span className="font-mono text-neutral-400">
-										{subtitleBackground.paddingX}
+										{subtitleBackground.paddingX}px
 									</span>
 								</div>
 								<input
@@ -829,7 +974,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									id="subtitle-padding-x"
 									aria-label="Mở rộng nền ngang"
 									min={0}
-									max={600}
+									max={700}
 									step={10}
 									disabled={isProcessing}
 									value={subtitleBackground.paddingX}
@@ -839,16 +984,22 @@ export function VietnameseAiPanel({ projectId }: Props) {
 										})
 									}
 								/>
+								<span className="text-[10px] text-neutral-500">
+									Mở rộng thêm sang 2 bên để che hết các câu chữ gốc dài.
+								</span>
 							</div>
 
 							{/* Padding Y */}
 							<div className="flex flex-col gap-1">
 								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-padding-y" className="text-xs">
-										Mở rộng nền dọc
+									<Label
+										htmlFor="subtitle-padding-y"
+										className="text-xs text-neutral-300"
+									>
+										Mở rộng nền dọc (Padding Y)
 									</Label>
 									<span className="font-mono text-neutral-400">
-										{subtitleBackground.paddingY}
+										{subtitleBackground.paddingY}px
 									</span>
 								</div>
 								<input
@@ -869,11 +1020,34 @@ export function VietnameseAiPanel({ projectId }: Props) {
 								/>
 							</div>
 
-							<p className="text-[11px] text-neutral-400 leading-relaxed">
-								Tùy chỉnh độ mờ trong suốt (Opacity) và độ nhòe (Blur) giúp phụ đề
-								nổi bật, mềm mại và hòa quyện với video mà không che khuất cảnh
-								quay. Thay đổi áp dụng ngay cho các caption trên timeline.
-							</p>
+							<div className="flex flex-col gap-2 border-t border-neutral-800/80 pt-2.5">
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									disabled={isProcessing}
+									onClick={() => {
+										updateSubtitleBackground({});
+										toast.success(
+											"Đã đồng bộ nền mờ cho toàn bộ phụ đề trên timeline!",
+										);
+									}}
+									className="w-full text-xs h-7 border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200"
+								>
+									🔄 Đồng bộ nền cho tất cả phụ đề
+								</Button>
+
+								<Button
+									type="button"
+									variant="secondary"
+									size="sm"
+									disabled={isProcessing}
+									onClick={addSubtitleCoverStrip}
+									className="w-full text-xs h-7 bg-neutral-800 hover:bg-neutral-700 text-neutral-200"
+								>
+									✨ Thêm dải mờ che phụ đề gốc suốt video
+								</Button>
+							</div>
 						</div>
 					)}
 				</div>

@@ -4,10 +4,11 @@ import path from "node:path";
 import { FFmpegService } from "./ffmpeg";
 
 export function pythonBinary(separation = false): string {
+	if (!separation && process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
 	const local = path.resolve(process.cwd(), "../../.local_tools/audio", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-	if (separation && existsSync(local)) return local;
+	if (existsSync(local)) return local;
 	return process.env.PYTHON_BIN || (process.platform === "win32"
-		? path.join(process.env.LOCALAPPDATA || "", "Programs/Python/Python311/python.exe")
+		? "python"
 		: "python3");
 }
 
@@ -25,7 +26,12 @@ export function runPython(code: string, args: string[], timeoutMs: number, separ
 		}, timeoutMs);
 		child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
 		child.stderr.on("data", (chunk) => { stderr = (stderr + chunk.toString()).slice(-4000); });
-		child.on("error", (error) => { clearTimeout(timer); reject(error); });
+		child.on("error", (error: NodeJS.ErrnoException) => {
+			clearTimeout(timer);
+			reject(error.code === "ENOENT"
+				? new Error("Python was not found. Install Python on PATH or set PYTHON_BIN in apps/web/.env.local.", { cause: error })
+				: error);
+		});
 		child.on("close", (status) => {
 			clearTimeout(timer);
 			if (status === 0) resolve(stdout);

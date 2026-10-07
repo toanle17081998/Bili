@@ -9,6 +9,10 @@ import {
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
 import {
+	canPredecodeAudio,
+	renderTimedAudioBuffers,
+} from "@/media/preview-audio";
+import {
 	getClipTimeAtSourceTime,
 	getSourceTimeAtClipTime,
 	renderRetimedBuffer,
@@ -39,9 +43,17 @@ export class AudioManager {
 	>();
 	private queuedSources = new Set<AudioBufferSourceNode>();
 	private preparedClipBuffers = new Map<string, Promise<AudioBuffer | null>>();
-	private decodedBuffers = new Map<string, Promise<AudioBuffer | null>>();
+	private decodedBuffers = new Map<
+		string,
+		{ file: File; promise: Promise<AudioBuffer | null> }
+	>();
+	private decodedBufferBytes = new Map<string, number>();
+	private preparedBufferBytes = new Map<string, number>();
+	private audioPreparationQueue: Promise<void> = Promise.resolve();
 	private playbackSessionId = 0;
+	private audioCacheGeneration = 0;
 	private lastIsPlaying = false;
+	private lastIsScrubbing = false;
 	private lastVolume = 1;
 	private playbackLatencyCompensationSeconds = 0;
 	private unsubscribers: Array<() => void> = [];
@@ -52,20 +64,23 @@ export class AudioManager {
 		this.unsubscribers.push(
 			this.editor.playback.subscribe(this.handlePlaybackChange),
 			this.editor.timeline.subscribe(this.handleTimelineChange),
-			this.editor.media.subscribe(this.handleTimelineChange),
+			this.editor.media.subscribe(this.handleMediaChange),
 			this.editor.playback.onSeek(this.handleSeek),
 		);
 	}
 
 	dispose(): void {
 		this.stopPlayback();
+		this.audioCacheGeneration++;
 		for (const unsub of this.unsubscribers) {
 			unsub();
 		}
 		this.unsubscribers = [];
 		this.disposeSinks();
 		this.preparedClipBuffers.clear();
+		this.preparedBufferBytes.clear();
 		this.decodedBuffers.clear();
+		this.decodedBufferBytes.clear();
 		if (this.audioContext) {
 			void this.audioContext.close();
 			this.audioContext = null;
@@ -76,6 +91,10 @@ export class AudioManager {
 	private handlePlaybackChange = (): void => {
 		const isPlaying = this.editor.playback.getIsPlaying();
 		const volume = this.editor.playback.getVolume();
+		const isScrubbing = this.editor.playback.getIsScrubbing();
+		if (this.lastIsScrubbing && !isScrubbing && !isPlaying)
+			void this.warmUpcomingAudio();
+		this.lastIsScrubbing = isScrubbing;
 
 		if (volume !== this.lastVolume) {
 			this.lastVolume = volume;
@@ -106,19 +125,61 @@ export class AudioManager {
 		}
 
 		this.stopPlayback();
+		void this.warmUpcomingAudio();
 	};
 
 	private handleTimelineChange = (): void => {
+		this.audioCacheGeneration++;
 		this.disposeSinks();
 		this.preparedClipBuffers.clear();
-		this.decodedBuffers.clear();
+		this.preparedBufferBytes.clear();
 
-		if (!this.editor.playback.getIsPlaying()) return;
+		if (!this.editor.playback.getIsPlaying()) {
+			void this.warmUpcomingAudio();
+			return;
+		}
 
 		void this.startPlayback({
 			time: this.editor.playback.getCurrentTime() / TICKS_PER_SECOND,
 		});
 	};
+
+	private handleMediaChange = (): void => {
+		this.decodedBuffers.clear();
+		this.decodedBufferBytes.clear();
+		this.handleTimelineChange();
+	};
+
+	private async warmUpcomingAudio(): Promise<void> {
+		const generation = this.audioCacheGeneration;
+		const scene = this.editor.scenes.getActiveSceneOrNull();
+		if (!scene) return;
+		try {
+			const clips = await collectAudioClips({
+				tracks: scene.tracks,
+				mediaAssets: this.editor.media.getAssets(),
+			});
+			if (
+				generation !== this.audioCacheGeneration ||
+				this.editor.playback.getIsPlaying()
+			)
+				return;
+			const time = this.editor.playback.getCurrentTime() / TICKS_PER_SECOND;
+			await Promise.all(
+				clips
+					.filter(
+						(clip) =>
+							!clip.muted &&
+							clip.startTime <= time + this.lookaheadSeconds &&
+							clip.startTime + clip.duration > time &&
+							this.shouldUsePreparedClipBuffer({ clip }),
+					)
+					.map((clip) => this.getPreparedClipBuffer({ clip })),
+			);
+		} catch (error) {
+			console.warn("Failed to prepare preview audio:", error);
+		}
+	}
 
 	private ensureAudioContext(): AudioContext | null {
 		if (this.audioContext) return this.audioContext;
@@ -151,7 +212,7 @@ export class AudioManager {
 		if (!audioContext) return;
 
 		this.stopPlayback();
-		this.playbackSessionId++;
+		const sessionId = this.playbackSessionId;
 		this.playbackLatencyCompensationSeconds = 0;
 
 		const tracks = this.editor.scenes.getActiveScene().tracks;
@@ -164,8 +225,13 @@ export class AudioManager {
 			await audioContext.resume();
 		}
 
-		this.clips = await collectAudioClips({ tracks, mediaAssets });
-		if (!this.editor.playback.getIsPlaying()) return;
+		const clips = await collectAudioClips({ tracks, mediaAssets });
+		if (
+			!this.editor.playback.getIsPlaying() ||
+			sessionId !== this.playbackSessionId
+		)
+			return;
+		this.clips = clips;
 
 		this.playbackStartTime = time;
 		this.playbackStartContextTime = audioContext.currentTime;
@@ -211,6 +277,7 @@ export class AudioManager {
 	}
 
 	private stopPlayback(): void {
+		this.playbackSessionId++;
 		if (this.scheduleTimer && typeof window !== "undefined") {
 			window.clearInterval(this.scheduleTimer);
 		}
@@ -379,6 +446,11 @@ export class AudioManager {
 
 		const node = audioContext.createBufferSource();
 		node.buffer = buffer;
+		const directSource = this.canUseDecodedSource({ clip });
+		const sourceRate = directSource
+			? clampRetimeRate({ rate: clip.retime?.rate ?? 1 })
+			: 1;
+		node.playbackRate.value = sourceRate;
 		const clipGain = audioContext.createGain();
 		node.connect(clipGain);
 		clipGain.connect(this.masterGain ?? audioContext.destination);
@@ -392,12 +464,20 @@ export class AudioManager {
 		let actualClipOffset = clipOffset;
 
 		if (startTimestamp >= audioContext.currentTime) {
-			node.start(startTimestamp, clipOffset);
+			node.start(
+				startTimestamp,
+				(directSource ? clip.trimStart : 0) + clipOffset * sourceRate,
+				(clipEnd - effectiveStartTime) * sourceRate,
+			);
 		} else {
 			const lateOffset = audioContext.currentTime - startTimestamp;
 			actualStartTimestamp = audioContext.currentTime;
 			actualClipOffset = clipOffset + lateOffset;
-			node.start(actualStartTimestamp, actualClipOffset);
+			node.start(
+				actualStartTimestamp,
+				(directSource ? clip.trimStart : 0) + actualClipOffset * sourceRate,
+				Math.max(0, clip.duration - actualClipOffset) * sourceRate,
+			);
 		}
 
 		this.scheduleClipGainAutomation({
@@ -460,6 +540,12 @@ export class AudioManager {
 		clip: AudioClipSource;
 	}): boolean {
 		return (
+			canPredecodeAudio({
+				fileBytes: clip.file.size,
+				sourceDuration:
+					(clip.timelineElement.sourceDuration ?? Infinity) / TICKS_PER_SECOND,
+				playbackDuration: clip.duration,
+			}) ||
 			this.hasCurveRetime({ clip }) ||
 			hasAnimatedVolume({ element: clip.timelineElement }) ||
 			shouldMaintainPitch({
@@ -470,8 +556,19 @@ export class AudioManager {
 	}
 
 	private hasCurveRetime({ clip }: { clip: AudioClipSource }): boolean {
-		const mode = (clip.retime as { mode?: unknown } | undefined)?.mode;
+		const mode =
+			clip.retime && "mode" in clip.retime ? clip.retime.mode : undefined;
 		return mode === "curve";
+	}
+
+	private canUseDecodedSource({ clip }: { clip: AudioClipSource }): boolean {
+		return (
+			!this.hasCurveRetime({ clip }) &&
+			!shouldMaintainPitch({
+				rate: clip.retime?.rate ?? 1,
+				maintainPitch: clip.retime?.maintainPitch,
+			})
+		);
 	}
 
 	private scheduleClipGainAutomation({
@@ -539,31 +636,51 @@ export class AudioManager {
 		clip: AudioClipSource;
 	}): Promise<AudioBuffer | null> {
 		const cacheKey = this.buildPreparedClipCacheKey({ clip });
+		const generation = this.audioCacheGeneration;
 		const existing = this.preparedClipBuffers.get(cacheKey);
 		if (existing) {
+			this.preparedClipBuffers.delete(cacheKey);
+			this.preparedClipBuffers.set(cacheKey, existing);
 			return existing;
 		}
 
-		const promise = (async () => {
-			const audioContext = this.ensureAudioContext();
-			if (!audioContext) {
-				return null;
-			}
+		const promise: Promise<AudioBuffer | null> =
+			this.audioPreparationQueue.then(async () => {
+				if (generation !== this.audioCacheGeneration) return null;
+				const audioContext = this.ensureAudioContext();
+				if (!audioContext) {
+					return null;
+				}
 
-			const decodedBuffer = await this.getDecodedBuffer({ clip });
-			if (!decodedBuffer) {
-				return null;
-			}
+				const decodedBuffer = await this.getDecodedBuffer({ clip });
+				if (!decodedBuffer || generation !== this.audioCacheGeneration) {
+					return null;
+				}
+				if (this.canUseDecodedSource({ clip })) {
+					return decodedBuffer;
+				}
 
-			return await renderRetimedBuffer({
-				audioContext,
-				sourceBuffer: decodedBuffer,
-				trimStart: clip.trimStart,
-				clipDuration: clip.duration,
-				retime: clip.retime,
-				maintainPitch: clip.retime?.maintainPitch === true,
+				const prepared = await renderRetimedBuffer({
+					audioContext,
+					sourceBuffer: decodedBuffer,
+					trimStart: clip.trimStart,
+					clipDuration: clip.duration,
+					retime: clip.retime,
+					maintainPitch: clip.retime?.maintainPitch === true,
+				});
+				if (this.preparedClipBuffers.get(cacheKey) === promise) {
+					this.preparedBufferBytes.set(
+						cacheKey,
+						prepared.length * prepared.numberOfChannels * 4,
+					);
+					this.trimAudioCache();
+				}
+				return prepared;
 			});
-		})();
+		this.audioPreparationQueue = promise.then(
+			() => undefined,
+			() => undefined,
+		);
 
 		this.preparedClipBuffers.set(cacheKey, promise);
 		return promise;
@@ -575,13 +692,50 @@ export class AudioManager {
 		clip: AudioClipSource;
 	}): Promise<AudioBuffer | null> {
 		const existing = this.decodedBuffers.get(clip.sourceKey);
-		if (existing) {
-			return existing;
+		if (existing && existing.file === clip.file) {
+			this.decodedBuffers.delete(clip.sourceKey);
+			this.decodedBuffers.set(clip.sourceKey, existing);
+			return existing.promise;
 		}
+		this.decodedBufferBytes.delete(clip.sourceKey);
 
-		const promise = this.decodeClipBuffer({ clip });
-		this.decodedBuffers.set(clip.sourceKey, promise);
+		const promise = this.decodeClipBuffer({ clip }).then((buffer) => {
+			if (
+				buffer &&
+				this.decodedBuffers.get(clip.sourceKey)?.promise === promise
+			) {
+				this.decodedBufferBytes.set(
+					clip.sourceKey,
+					buffer.length * buffer.numberOfChannels * 4,
+				);
+				this.trimAudioCache();
+			}
+			return buffer;
+		});
+		this.decodedBuffers.set(clip.sourceKey, { file: clip.file, promise });
 		return promise;
+	}
+
+	private trimAudioCache(): void {
+		const sum = (values: Iterable<number>) =>
+			Array.from(values).reduce((total, value) => total + value, 0);
+		let bytes =
+			sum(this.decodedBufferBytes.values()) +
+			sum(this.preparedBufferBytes.values());
+		for (const key of this.preparedClipBuffers.keys()) {
+			if (bytes <= 256 * 1024 * 1024) break;
+			bytes -= this.preparedBufferBytes.get(key) ?? 0;
+			this.preparedClipBuffers.delete(key);
+			this.preparedBufferBytes.delete(key);
+		}
+		for (const key of this.decodedBuffers.keys()) {
+			if (bytes <= 256 * 1024 * 1024) break;
+			bytes -= this.decodedBufferBytes.get(key) ?? 0;
+			this.decodedBuffers.delete(key);
+			this.decodedBufferBytes.delete(key);
+			this.preparedClipBuffers.clear();
+			this.preparedBufferBytes.clear();
+		}
 	}
 
 	private async decodeClipBuffer({
@@ -593,7 +747,6 @@ export class AudioManager {
 		if (!audioContext) {
 			return null;
 		}
-
 		const input = new Input({
 			source: new BlobSource(clip.file),
 			formats: ALL_FORMATS,
@@ -604,63 +757,35 @@ export class AudioManager {
 			if (!audioTrack) {
 				return null;
 			}
+			const firstTimestamp = await audioTrack.getFirstTimestamp();
+			if (
+				canPredecodeAudio({
+					fileBytes: clip.file.size,
+					sourceDuration:
+						(clip.timelineElement.sourceDuration ?? Infinity) /
+						TICKS_PER_SECOND,
+				}) &&
+				Math.abs(firstTimestamp) < 0.001
+			) {
+				try {
+					const decoded = await audioContext.decodeAudioData(
+						await clip.file.arrayBuffer(),
+					);
+					const sourceEnd = await audioTrack.computeDuration();
+					if (Math.abs(decoded.duration - sourceEnd) <= 0.001) return decoded;
+				} catch {
+					// Preserve codec support and source timing through the demuxed fallback.
+				}
+			}
 
 			const sink = new AudioBufferSink(audioTrack);
-			const chunks: AudioBuffer[] = [];
-			let totalSamples = 0;
-
-			for await (const { buffer } of sink.buffers(0)) {
-				chunks.push(buffer);
-				totalSamples += buffer.length;
-			}
-
-			if (chunks.length === 0) {
-				return null;
-			}
-
-			const targetSampleRate = audioContext.sampleRate;
-			const nativeSampleRate = chunks[0].sampleRate;
-			const numChannels = Math.min(2, chunks[0].numberOfChannels);
-			const nativeChannels = Array.from(
-				{ length: numChannels },
-				() => new Float32Array(totalSamples),
-			);
-
-			let offset = 0;
-			for (const chunk of chunks) {
-				for (let channel = 0; channel < numChannels; channel++) {
-					nativeChannels[channel].set(
-						chunk.getChannelData(Math.min(channel, chunk.numberOfChannels - 1)),
-						offset,
-					);
-				}
-				offset += chunk.length;
-			}
-
-			const outputSamples = Math.ceil(
-				totalSamples * (targetSampleRate / nativeSampleRate),
-			);
-			const offlineContext = new OfflineAudioContext(
-				numChannels,
-				outputSamples,
-				targetSampleRate,
-			);
-			const nativeBuffer = audioContext.createBuffer(
-				numChannels,
-				totalSamples,
-				nativeSampleRate,
-			);
-
-			for (let channel = 0; channel < numChannels; channel++) {
-				nativeBuffer.copyToChannel(nativeChannels[channel], channel);
-			}
-
-			const sourceNode = offlineContext.createBufferSource();
-			sourceNode.buffer = nativeBuffer;
-			sourceNode.connect(offlineContext.destination);
-			sourceNode.start(0);
-
-			return await offlineContext.startRendering();
+			const chunks: Array<{ buffer: AudioBuffer; timestamp: number }> = [];
+			for await (const { buffer, timestamp } of sink.buffers(0))
+				chunks.push({ buffer, timestamp });
+			return await renderTimedAudioBuffers({
+				chunks,
+				sampleRate: audioContext.sampleRate,
+			});
 		} catch (error) {
 			console.warn("Failed to decode clip audio:", error);
 			return null;

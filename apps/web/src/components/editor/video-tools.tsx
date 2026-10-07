@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Eraser } from "lucide-react";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
 import { buildGraphicElement } from "@/timeline/element-utils";
@@ -17,6 +18,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { ExportButton } from "./export-button";
+import { WatermarkRemovalDialog } from "./watermark-removal-dialog";
 
 const PRESETS = [
 	{ label: "Dọc 9:16 · 1080 × 1920", width: 1080, height: 1920 },
@@ -34,6 +36,7 @@ export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
 	const [customHeight, setCustomHeight] = useState(String(height));
 	const [color, setColor] = useState("#000000");
 	const [error, setError] = useState("");
+	const [isRemovalOpen, setIsRemovalOpen] = useState(false);
 	const value = PRESETS.some((p) => p.width === width && p.height === height)
 		? `${width}x${height}`
 		: "custom";
@@ -173,6 +176,22 @@ export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
 				</p>
 			</div>
 			<div className="flex flex-col gap-3 border-t pt-4">
+				<h4 className="text-sm font-semibold">Xóa logo</h4>
+				<Button
+					variant="outline"
+					onClick={() => {
+						editor.playback.pause();
+						setIsRemovalOpen(true);
+					}}
+				>
+					<Eraser />
+					Khoanh vùng xóa logo
+				</Button>
+			</div>
+			{isRemovalOpen && (
+				<WatermarkRemovalDialog onClose={() => setIsRemovalOpen(false)} />
+			)}
+			<div className="flex flex-col gap-3 border-t pt-4">
 				<h4 className="text-sm font-semibold">Che logo</h4>
 				<div className="flex items-center justify-between">
 					<Label htmlFor="cover-color">Màu vùng che</Label>
@@ -193,9 +212,7 @@ export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
 				</p>
 			</div>
 			<div className="mt-auto flex items-center justify-between border-t pt-4">
-				<span className="text-xs text-muted-foreground">
-					Xuất kèm vùng che logo
-				</span>
+				<span className="text-xs text-muted-foreground">Xuất video</span>
 				<ExportButton />
 			</div>
 		</div>

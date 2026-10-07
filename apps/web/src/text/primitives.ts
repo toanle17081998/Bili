@@ -187,8 +187,28 @@ export function drawMeasuredTextLayout({
 			const blur = background.blur ?? 0;
 			if (blur > 0) {
 				ctx.save();
+				ctx.fillStyle = backgroundColor;
 				ctx.shadowColor = backgroundColor;
-				ctx.shadowBlur = blur;
+
+				// Outer soft blur feather (simulating gaussian falloff for delogo effect)
+				ctx.shadowBlur = blur * 1.5;
+				ctx.beginPath();
+				ctx.roundRect(
+					backgroundRect.left,
+					backgroundRect.top,
+					backgroundRect.width,
+					backgroundRect.height,
+					radius,
+				);
+				ctx.fill();
+
+				// Mid feather pass
+				ctx.shadowBlur = blur * 0.75;
+				ctx.fill();
+				ctx.restore();
+
+				// Core fill to guarantee underlying text/watermark is completely hidden
+				ctx.save();
 				ctx.fillStyle = backgroundColor;
 				ctx.beginPath();
 				ctx.roundRect(

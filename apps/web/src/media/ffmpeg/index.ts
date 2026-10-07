@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 
 export interface VideoProbeResult {
 	duration: number; // in seconds
@@ -9,11 +9,33 @@ export interface VideoProbeResult {
 	height: number;
 	fps: number;
 	hasAudio: boolean;
+	audioCodecs?: string[];
 	bitrate?: number;
 }
 
 export class FFmpegService {
 	static getBinaryPath(name: string): string {
+		const configured = process.env[`${name.toUpperCase()}_PATH`];
+		if (configured) {
+			return existsSync(configured) && statSync(configured).isDirectory()
+				? path.join(
+						configured,
+						process.platform === "win32" ? `${name}.exe` : name,
+					)
+				: configured;
+		}
+		if (name === "ffprobe" && process.env.FFMPEG_PATH) {
+			const location = process.env.FFMPEG_PATH;
+			const directory =
+				existsSync(location) && statSync(location).isDirectory()
+					? location
+					: path.dirname(location);
+			const probe = path.join(
+				directory,
+				process.platform === "win32" ? "ffprobe.exe" : "ffprobe",
+			);
+			if (existsSync(probe)) return probe;
+		}
 		const wingetGyanPath = path.join(
 			process.env.LOCALAPPDATA || "C:\\Users\\Admin\\AppData\\Local",
 			"Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build\\bin",
@@ -28,12 +50,17 @@ export class FFmpegService {
 	static async runCommand(
 		cmd: string,
 		args: string[],
+		options: { signal?: AbortSignal } = {},
 	): Promise<{ stdout: string; stderr: string }> {
 		const binary = this.getBinaryPath(cmd);
 		return new Promise((resolve, reject) => {
-			const process = spawn(binary, args, { shell: false });
+			const process = spawn(binary, args, {
+				shell: false,
+				signal: options.signal,
+			});
 			let stdout = "";
 			let stderr = "";
+			let commandError: Error | undefined;
 
 			process.stdout.on("data", (data) => {
 				stdout += data.toString();
@@ -44,7 +71,9 @@ export class FFmpegService {
 			});
 
 			process.on("close", (code) => {
-				if (code === 0) {
+				if (commandError) {
+					reject(commandError);
+				} else if (code === 0) {
 					resolve({ stdout, stderr });
 				} else {
 					reject(
@@ -56,24 +85,29 @@ export class FFmpegService {
 			});
 
 			process.on("error", (err) => {
-				reject(err);
+				// Wait for closed file handles before callers remove temporary files.
+				commandError = err;
 			});
 		});
 	}
 
-	static async probeVideo(filePath: string): Promise<VideoProbeResult> {
+	static async probeVideo(
+		input: string | { filePath: string; signal?: AbortSignal },
+	): Promise<VideoProbeResult> {
+		const { filePath, signal } =
+			typeof input === "string" ? { filePath: input } : input;
 		try {
 			const args = [
 				"-v",
 				"error",
 				"-show_entries",
-				"stream=width,height,r_frame_rate,codec_type:format=duration,bit_rate",
+				"stream=width,height,r_frame_rate,codec_type,codec_name:stream_side_data=rotation:format=duration,bit_rate",
 				"-of",
 				"json",
 				filePath,
 			];
 
-			const { stdout } = await this.runCommand("ffprobe", args);
+			const { stdout } = await this.runCommand("ffprobe", args, { signal });
 			const data = JSON.parse(stdout);
 
 			const videoStream = data.streams?.find(
@@ -90,14 +124,27 @@ export class FFmpegService {
 			}
 
 			const duration = parseFloat(data.format?.duration || "0");
-			if (!Number.isFinite(duration) || duration <= 0) throw new Error("Invalid media duration");
+			if (!Number.isFinite(duration) || duration <= 0)
+				throw new Error("Invalid media duration");
 
+			const rotation = Number(
+				videoStream?.side_data_list?.find(
+					(entry: { rotation?: number }) => typeof entry.rotation === "number",
+				)?.rotation ?? 0,
+			);
+			const rotated = Math.abs(rotation) % 180 === 90;
 			return {
 				duration,
-				width: videoStream?.width || 1080,
-				height: videoStream?.height || 1920,
+				width: (rotated ? videoStream?.height : videoStream?.width) || 1080,
+				height: (rotated ? videoStream?.width : videoStream?.height) || 1920,
 				fps,
 				hasAudio: !!audioStream,
+				audioCodecs:
+					data.streams
+						?.filter(
+							(stream: { codec_type: string }) => stream.codec_type === "audio",
+						)
+						.map((stream: { codec_name: string }) => stream.codec_name) ?? [],
 				bitrate: parseInt(data.format?.bit_rate || "0", 10),
 			};
 		} catch (e) {
@@ -172,7 +219,9 @@ export class FFmpegService {
 
 		if (subtitlesPath) {
 			// Subtitle overlay using subtitles filter (escape path for ffmpeg filter)
-			const safeSubPath = subtitlesPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+			const safeSubPath = subtitlesPath
+				.replace(/\\/g, "/")
+				.replace(/:/g, "\\:");
 			filterComplex.push(
 				`[vbase]subtitles='${safeSubPath}':charenc=UTF-8:force_style='Alignment=2,FontSize=20,Fontname=Arial,Bold=1,Outline=2,Shadow=1'[vfinal]`,
 			);
@@ -216,7 +265,10 @@ export class FFmpegService {
 		try {
 			await this.runCommand("ffmpeg", args);
 		} catch (err) {
-			console.warn("FFmpeg export with subtitles failed, retrying without subtitle filter:", err);
+			console.warn(
+				"FFmpeg export with subtitles failed, retrying without subtitle filter:",
+				err,
+			);
 			const fallbackArgs = [
 				...inputs,
 				"-filter_complex",

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { LocalizationPipeline } from "@/localization/pipeline";
 import path from "path";
 import fs from "fs";
+import { TranslationCooldownError } from "@/providers/llm/free-translate";
 
 export async function POST(request: NextRequest) {
 	try {
@@ -49,14 +50,20 @@ export async function POST(request: NextRequest) {
 			transcript: preview.transcript,
 			translations: preview.translations,
 		});
-	} catch (error: any) {
+	} catch (error: unknown) {
 		console.error("Localization preview API error:", error);
+		if (error instanceof TranslationCooldownError) {
+			return NextResponse.json(
+				{ success: false, error: error.message },
+				{ status: error.status, headers: { "Retry-After": String(Math.ceil(error.retryAfterMs / 1000)) } },
+			);
+		}
 		return NextResponse.json(
 			{
 				success: false,
-				error:
-					error.message ||
-					"Lỗi khi trích xuất và tạo kịch bản phụ đề xem trước",
+				error: error instanceof Error
+					? error.message
+					: "Lỗi khi trích xuất và tạo kịch bản phụ đề xem trước",
 			},
 			{ status: 500 },
 		);

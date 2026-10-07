@@ -38,6 +38,7 @@ import {
 import { VideoTools } from "@/components/editor/video-tools";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { VietnameseAiPanel } from "@/components/editor/vietnamese-ai";
+import { SocialCopyPanel } from "@/components/editor/social-copy-panel";
 
 export default function Editor() {
 	const params = useParams();
@@ -202,10 +203,11 @@ function EditorLayout({ projectId }: { projectId: string }) {
 							onValueChange={setToolTab}
 							className="flex h-full min-h-0 flex-col"
 						>
-							<TabsList className="w-full shrink-0">
+							<TabsList className="grid w-full shrink-0 grid-cols-2 gap-1 p-1">
 								<TabsTrigger value="video">Video</TabsTrigger>
 								<TabsTrigger value="details">Chi tiết</TabsTrigger>
 								<TabsTrigger value="ai">AI Việt hóa</TabsTrigger>
+								<TabsTrigger value="social">Caption & tag</TabsTrigger>
 							</TabsList>
 							<TabsContent value="video" className="min-h-0 flex-1">
 								<VideoTools onEditCover={() => setToolTab("details")} />
@@ -215,6 +217,9 @@ function EditorLayout({ projectId }: { projectId: string }) {
 							</TabsContent>
 							<TabsContent value="ai" className="min-h-0 flex-1">
 								<VietnameseAiPanel projectId={projectId} />
+							</TabsContent>
+							<TabsContent value="social" className="min-h-0 flex-1">
+								<SocialCopyPanel key={projectId} projectId={projectId} />
 							</TabsContent>
 						</Tabs>
 					</ResizablePanel>

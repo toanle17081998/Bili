@@ -1,148 +1,109 @@
 import type { TranscriptSegment, TranslationSegment } from "@/localization/schemas";
+import { loadDubbingTiming } from "@/localization/timing";
+import { getOpenAILLMApiKey, getOpenAILLMBaseUrl, getOpenAILLMModel } from "@/providers/openai-compatible";
+import { decodeTranslationRows, translateInBatches, translationPrompt, TranslationResponseError } from "./batched-translation";
+import { TranslationCooldownError } from "./free-translate";
 export { FreeTranslateLLMProvider } from "./free-translate";
 
 export interface LLMProvider {
 	readonly name: string;
-	translateAndRewrite(
-		segments: TranscriptSegment[],
-	): Promise<TranslationSegment[]>;
+	translateAndRewrite(segments: TranscriptSegment[]): Promise<TranslationSegment[]>;
+}
+
+interface ProviderOptions {
+	apiKey?: string;
+	fetchImpl?: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+	cacheDirectory?: string | false;
+}
+
+async function checkResponse({ response, provider }: { response: Response; provider: string }) {
+	if (response.ok) return;
+	const header = response.headers.get("Retry-After");
+	const seconds = header?.trim() ? Number(header) : NaN;
+	const retryAfter = Number.isFinite(seconds) ? Math.max(0, seconds * 1000)
+		: Math.max(0, Date.parse(header ?? "") - Date.now()) || 0;
+	await response.body?.cancel();
+	if (response.status === 429 || response.status === 503 || retryAfter > 0) {
+		const policy = await loadDubbingTiming();
+		throw new TranslationCooldownError({ status: response.status === 429 ? 429 : 503, retryAfterMs: policy.translation_cooldown_ms(retryAfter) });
+	}
+	throw new Error(`${provider} dịch lời thoại trả HTTP ${response.status}. Kiểm tra cấu hình dịch vụ LLM.`);
 }
 
 export class GeminiLLMProvider implements LLMProvider {
 	readonly name = "gemini";
-	private apiKey: string;
-
-	constructor(apiKey?: string) {
-		this.apiKey = apiKey || process.env.GEMINI_API_KEY || "";
+	private readonly apiKey: string;
+	private readonly options: ProviderOptions;
+	constructor(config?: string | ProviderOptions) {
+		this.options = typeof config === "string" ? { apiKey: config } : config ?? {};
+		this.apiKey = (this.options.apiKey || process.env.GEMINI_API_KEY || "").trim();
 	}
 
-	async translateAndRewrite(
-		segments: TranscriptSegment[],
-	): Promise<TranslationSegment[]> {
-		if (!this.apiKey) {
-			throw new Error("GEMINI_API_KEY is not configured.");
-		}
-
-		const prompt = `
-Bạn là một chuyên gia biên kịch video và chuyển ngữ video ngắn (Shorts / Reels / TikTok) sang tiếng Việt.
-Nhiệm vụ của bạn:
-1. Đọc kịch bản gốc từng đoạn có kèm thời lượng (start, end, text).
-2. Hiểu trọn vẹn ngữ cảnh và dịch/viết lại sang TIẾNG VIỆT TỰ NHIÊN, giọng nói cuốn hút, ngắn gọn, dễ nghe như người thuyết minh bản xứ.
-3. QUAN TRỌNG: Độ dài câu thuyết minh tiếng Việt phải phù hợp với thời lượng targetDuration = end - start. Không dùng từ rườm rà.
-4. Trả về đúng định dạng JSON Array chứa các object:
-[
-  {
-    "sourceStart": number,
-    "sourceEnd": number,
-    "sourceText": string,
-    "vietnameseText": string,
-    "targetDuration": number
-  }
-]
-
-Dưới đây là các đoạn cần chuyển ngữ:
-Return exactly one result per input, in the same order. Copy sourceText exactly; never combine or skip segments.
-${JSON.stringify(
-	segments.map((s) => ({
-		sourceStart: s.start,
-		sourceEnd: s.end,
-		sourceText: s.text,
-		targetDuration: Number((s.end - s.start).toFixed(2)),
-	})),
-	null,
-	2,
-)}
-`;
-
-		const response = await fetch(
-			`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.apiKey}`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					contents: [{ parts: [{ text: prompt }] }],
-					generationConfig: { responseMimeType: "application/json" },
-				}),
+	async translateAndRewrite(segments: TranscriptSegment[]): Promise<TranslationSegment[]> {
+		if (!this.apiKey) throw new Error("GEMINI_API_KEY is not configured.");
+		const policy = await loadDubbingTiming();
+		return translateInBatches({
+			segments, namespace: "gemini-2.5-flash", cacheDirectory: this.options.cacheDirectory,
+			request: async ({ inputs, context }) => {
+				const response = await (this.options.fetchImpl ?? fetch)(
+					"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
+						body: JSON.stringify({
+							contents: [{ parts: [{ text: await translationPrompt({ inputs, context }) }] }],
+							generationConfig: { responseMimeType: "application/json", maxOutputTokens: policy.translation_llm_output_tokens(), thinkingConfig: { thinkingBudget: 0 } },
+						}),
+						signal: AbortSignal.timeout(90_000),
+					},
+				);
+				await checkResponse({ response, provider: "Gemini" });
+				let data;
+				try { data = await response.json(); }
+				catch { throw new TranslationResponseError("Gemini trả phản hồi JSON không hợp lệ."); }
+				const raw = data.candidates?.[0]?.content?.parts?.filter((part: { thought?: boolean }) => !part.thought)
+					.map((part: { text?: string }) => part.text ?? "").join("");
+				return decodeTranslationRows(raw);
 			},
-		);
-
-		if (!response.ok) {
-			const err = await response.text();
-			throw new Error(`Gemini API error (${response.status}): ${err}`);
-		}
-
-		const data = await response.json();
-		const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-		if (!rawText) throw new Error("Empty response from Gemini");
-
-		const parsed: TranslationSegment[] = JSON.parse(rawText);
-		return parsed;
+		});
 	}
 }
 
 export class OpenAILLMProvider implements LLMProvider {
 	readonly name = "openai";
-	private apiKey: string;
-
-	constructor(apiKey?: string) {
-		this.apiKey = apiKey || process.env.OPENAI_API_KEY || "";
+	private readonly apiKey: string;
+	private readonly options: ProviderOptions;
+	constructor(config?: string | ProviderOptions) {
+		this.options = typeof config === "string" ? { apiKey: config } : config ?? {};
+		this.apiKey = (this.options.apiKey || getOpenAILLMApiKey()).trim();
 	}
 
-	async translateAndRewrite(
-		segments: TranscriptSegment[],
-	): Promise<TranslationSegment[]> {
-		if (!this.apiKey) {
-			throw new Error("OPENAI_API_KEY is not configured.");
-		}
-
-		const prompt = `
-Bạn là chuyên gia chuyển ngữ video sang tiếng Việt tự nhiên (Shorts/TikTok).
-Chuyển đổi từng đoạn transcript sau sang lời thuyết minh tiếng Việt súc tích, tự nhiên, khớp thời lượng targetDuration:
-Return exactly one result per input, in the same order. Copy sourceText exactly; never combine or skip segments.
-${JSON.stringify(
-	segments.map((s) => ({
-		sourceStart: s.start,
-		sourceEnd: s.end,
-		sourceText: s.text,
-		targetDuration: Number((s.end - s.start).toFixed(2)),
-	})),
-	null,
-	2,
-)}
-
-Trả về duy nhất JSON array dạng:
-[
-  {
-    "sourceStart": number,
-    "sourceEnd": number,
-    "sourceText": string,
-    "vietnameseText": string,
-    "targetDuration": number
-  }
-]
-`;
-
-		const response = await fetch("https://api.openai.com/v1/chat/completions", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${this.apiKey}`,
+	async translateAndRewrite(segments: TranscriptSegment[]): Promise<TranslationSegment[]> {
+		if (!this.apiKey) throw new Error("Configure OPENAI_LLM_API_KEY or OPENAI_API_KEY for translation.");
+		const policy = await loadDubbingTiming();
+		const model = getOpenAILLMModel();
+		return translateInBatches({
+			segments, namespace: `openai:${getOpenAILLMBaseUrl()}:${model}`, cacheDirectory: this.options.cacheDirectory,
+			request: async ({ inputs, context }) => {
+				const response = await (this.options.fetchImpl ?? fetch)(`${getOpenAILLMBaseUrl()}/chat/completions`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+					body: JSON.stringify({
+						model,
+						messages: [{ role: "user", content: await translationPrompt({ inputs, context }) }],
+						response_format: { type: "json_object" },
+						...(/^(gpt-5|o[134])/.test(model)
+							? { max_completion_tokens: policy.translation_llm_output_tokens() }
+							: { max_tokens: policy.translation_llm_output_tokens() }),
+					}),
+					signal: AbortSignal.timeout(90_000),
+				});
+				await checkResponse({ response, provider: "OpenAI-compatible LLM" });
+				let data;
+				try { data = await response.json(); }
+				catch { throw new TranslationResponseError("LLM trả phản hồi JSON không hợp lệ."); }
+				return decodeTranslationRows(data.choices?.[0]?.message?.content);
 			},
-			body: JSON.stringify({
-				model: "gpt-4o-mini",
-				messages: [{ role: "user", content: prompt }],
-				response_format: { type: "json_object" },
-			}),
 		});
-
-		if (!response.ok) {
-			const err = await response.text();
-			throw new Error(`OpenAI API error (${response.status}): ${err}`);
-		}
-
-		const data = await response.json();
-		const raw = data.choices?.[0]?.message?.content;
-		const parsed = JSON.parse(raw);
-		return Array.isArray(parsed) ? parsed : parsed.segments || [];
 	}
 }

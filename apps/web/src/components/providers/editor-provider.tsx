@@ -22,6 +22,13 @@ import { mediaTimeFromSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 const projectLoads = new Map<string, Promise<void>>();
 
 async function loadImportedVideo(editor: EditorCore, projectId: string) {
+	const existing = editor.scenes.getActiveScene().tracks;
+	if (
+		[existing.main, ...existing.overlay].some((track) =>
+			track.elements.some((element) => element.type === "video"),
+		)
+	)
+		return;
 	const response = await fetch(
 		`/api/source/import?id=${encodeURIComponent(projectId)}`,
 	);

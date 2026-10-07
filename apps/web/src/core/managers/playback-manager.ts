@@ -232,9 +232,11 @@ export class PlaybackManager {
 		return;
 		}
 
-		this.currentTime = newTime;
-		this.notifyUpdate(newTime);
-		this.dispatchUpdateEvent(newTime);
+		if (newTime !== this.currentTime) {
+			this.currentTime = newTime;
+			this.notifyUpdate(newTime);
+			this.dispatchUpdateEvent(newTime);
+		}
 		this.playbackTimer = requestAnimationFrame(this.updateTime);
 	};
 

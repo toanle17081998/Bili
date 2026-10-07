@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -9,7 +9,6 @@ import {
 	PlayIcon,
 	SparklesIcon,
 	VideoReplayIcon,
-	Film01Icon,
 	ArrowRight01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -23,6 +22,7 @@ import {
 	DialogTitle,
 	DialogFooter,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import type { SearchResult } from "@/source/types";
 
@@ -38,6 +38,7 @@ export default function HomePage() {
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [isSearching, setIsSearching] = useState(false);
+	const [isLoadingMore, setIsLoadingMore] = useState(false);
 	const [hasSearched, setHasSearched] = useState(false);
 	const [results, setResults] = useState<SearchResult[]>([]);
 	const [previewVideo, setPreviewVideo] = useState<SearchResult | null>(null);
@@ -48,12 +49,13 @@ export default function HomePage() {
 	const [totalPages, setTotalPages] = useState(0);
 	const [activeQuery, setActiveQuery] = useState("");
 	const [searchError, setSearchError] = useState("");
+	const [loadMoreError, setLoadMoreError] = useState("");
 	const requestRef = useRef<AbortController | null>(null);
+	const sentinelRef = useRef<HTMLDivElement | null>(null);
 
 	const handleSearch = async (
 		e?: React.FormEvent,
 		customQuery?: string,
-		requestedPage = 1,
 	) => {
 		if (e) e.preventDefault();
 		const query = (
@@ -72,11 +74,13 @@ export default function HomePage() {
 		const controller = new AbortController();
 		requestRef.current = controller;
 		setIsSearching(true);
+		setIsLoadingMore(false);
 		setSearchError("");
+		setLoadMoreError("");
 		setHasSearched(true);
 		try {
 			const res = await fetch(
-				`/api/source/search?q=${encodeURIComponent(query)}&page=${requestedPage}`,
+				`/api/source/search?q=${encodeURIComponent(query)}&page=1`,
 				{ signal: controller.signal },
 			);
 			const data = await res.json();
@@ -107,6 +111,76 @@ export default function HomePage() {
 			if (requestRef.current === controller) setIsSearching(false);
 		}
 	};
+
+	const loadMore = useCallback(async () => {
+		if (
+			isSearching ||
+			isLoadingMore ||
+			page >= totalPages ||
+			!activeQuery
+		) {
+			return;
+		}
+
+		setIsLoadingMore(true);
+		setLoadMoreError("");
+
+		try {
+			const nextPage = page + 1;
+			const res = await fetch(
+				`/api/source/search?q=${encodeURIComponent(activeQuery)}&page=${nextPage}`,
+			);
+			const data = await res.json();
+
+			if (res.ok && data.success && Array.isArray(data.results)) {
+				setResults((prev) => {
+					const existingIds = new Set(prev.map((v) => v.id));
+					const newItems = data.results.filter(
+						(v: SearchResult) => !existingIds.has(v.id),
+					);
+					return [...prev, ...newItems];
+				});
+				setPage(data.page ?? nextPage);
+				setTotal(data.total ?? total);
+				setTotalPages(data.totalPages ?? totalPages);
+			} else {
+				setLoadMoreError(data.error || "Không thể tải thêm video.");
+			}
+		} catch {
+			setLoadMoreError("Kết nối bị gián đoạn khi tải thêm video.");
+		} finally {
+			setIsLoadingMore(false);
+		}
+	}, [isSearching, isLoadingMore, page, totalPages, activeQuery, total]);
+
+	useEffect(() => {
+		const sentinel = sentinelRef.current;
+		if (!sentinel) return;
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				const [entry] = entries;
+				if (
+					entry.isIntersecting &&
+					!isSearching &&
+					!isLoadingMore &&
+					!loadMoreError &&
+					page < totalPages &&
+					activeQuery
+				) {
+					loadMore();
+				}
+			},
+			{
+				rootMargin: "300px",
+			},
+		);
+
+		observer.observe(sentinel);
+		return () => {
+			observer.disconnect();
+		};
+	}, [loadMore, isSearching, isLoadingMore, loadMoreError, page, totalPages, activeQuery]);
 
 	const handleImportAndCreateProject = async (video: SearchResult) => {
 		setIsImporting(true);
@@ -261,7 +335,9 @@ export default function HomePage() {
 								)}
 							</div>
 							<span className="text-xs text-neutral-500">
-								{total > 0 ? `${total} video` : `${results.length} video`}
+								{total > 0
+									? `${results.length} / ${total} video`
+									: `${results.length} video`}
 							</span>
 						</div>
 					)}
@@ -420,32 +496,43 @@ export default function HomePage() {
 					)}
 				</div>
 
-				{/* Pagination */}
-				{totalPages > 1 && (
-					<nav
-						aria-label="Phân trang kết quả tìm kiếm"
-						className="flex flex-wrap items-center justify-center gap-4 pt-4"
-					>
-						<Button
-							variant="outline"
-							disabled={isSearching || page <= 1}
-							onClick={() => handleSearch(undefined, activeQuery, page - 1)}
-							className="border-neutral-800 text-neutral-300 hover:bg-neutral-900 text-xs"
-						>
-							Trang trước
-						</Button>
-						<span aria-live="polite" className="text-sm text-neutral-400">
-							Trang {page} / {totalPages}
-						</span>
-						<Button
-							variant="outline"
-							disabled={isSearching || page >= totalPages}
-							onClick={() => handleSearch(undefined, activeQuery, page + 1)}
-							className="border-neutral-800 text-neutral-300 hover:bg-neutral-900 text-xs"
-						>
-							Trang sau
-						</Button>
-					</nav>
+				{/* Auto Load More Sentinel & Loading States */}
+				{hasSearched && results.length > 0 && (
+					<div className="flex flex-col items-center justify-center pt-2 pb-8">
+						{page < totalPages && (
+							<div
+								ref={sentinelRef}
+								className="h-12 w-full flex items-center justify-center"
+							>
+								{isLoadingMore && (
+									<div className="flex items-center gap-2 text-xs text-neutral-400">
+										<Spinner className="size-4 text-rose-500" />
+										<span>Đang tải thêm video...</span>
+									</div>
+								)}
+							</div>
+						)}
+
+						{loadMoreError && (
+							<div className="flex flex-col items-center gap-2 py-3 text-center">
+								<p className="text-xs text-rose-400">{loadMoreError}</p>
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={loadMore}
+									className="border-neutral-800 text-neutral-300 hover:bg-neutral-900 text-xs h-8 px-4"
+								>
+									Thử tải lại
+								</Button>
+							</div>
+						)}
+
+						{page >= totalPages && (
+							<p className="text-xs text-neutral-500 py-4">
+								Đã hiển thị tất cả {results.length} video
+							</p>
+						)}
+					</div>
 				)}
 			</main>
 

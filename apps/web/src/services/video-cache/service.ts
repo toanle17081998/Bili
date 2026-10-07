@@ -6,6 +6,9 @@ import {
 	type WrappedCanvas,
 } from "mediabunny";
 
+// WebCodecs sample timestamps and timeline ticks can round the same boundary differently.
+const FRAME_TIME_EPSILON = 0.00001;
+
 interface VideoSinkData {
 	input: Input;
 	sink: CanvasSink;
@@ -15,6 +18,7 @@ interface VideoSinkData {
 	lastTime: number;
 	prefetching: boolean;
 	prefetchPromise: Promise<void> | null;
+	disposed: boolean;
 }
 
 export class VideoCache {
@@ -61,8 +65,9 @@ export class VideoCache {
 		sinkData: VideoSinkData;
 		time: number;
 	}): Promise<WrappedCanvas | null> {
-		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
+		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time + FRAME_TIME_EPSILON) {
 			sinkData.currentFrame = sinkData.nextFrame;
+			sinkData.lastTime = sinkData.currentFrame.timestamp;
 			sinkData.nextFrame = null;
 			this.startPrefetch({ sinkData });
 		}
@@ -77,10 +82,18 @@ export class VideoCache {
 			return sinkData.currentFrame;
 		}
 
+		// Keep the preceding image across a presentation gap. Do not consume future
+		// frames and then restart decoding from a distant keyframe to get back here.
+		if (sinkData.currentFrame && sinkData.nextFrame &&
+			time >= sinkData.currentFrame.timestamp - FRAME_TIME_EPSILON &&
+			sinkData.nextFrame.timestamp > time + FRAME_TIME_EPSILON) {
+			return sinkData.currentFrame;
+		}
+
 		if (
 			sinkData.iterator &&
 			sinkData.currentFrame &&
-			time >= sinkData.lastTime &&
+			time >= sinkData.lastTime - FRAME_TIME_EPSILON &&
 			time < sinkData.lastTime + 2.0
 		) {
 			const frame = await this.iterateToTime({ sinkData, targetTime: time });
@@ -106,7 +119,8 @@ export class VideoCache {
 		frame: WrappedCanvas;
 		time: number;
 	}): boolean {
-		return time >= frame.timestamp && time < frame.timestamp + frame.duration;
+		return time + FRAME_TIME_EPSILON >= frame.timestamp &&
+			time < frame.timestamp + frame.duration - FRAME_TIME_EPSILON;
 	}
 	private async iterateToTime({
 		sinkData,
@@ -125,16 +139,20 @@ export class VideoCache {
 				}
 
 				// Check if the nextFrame (which might have just arrived) is what we need
-				if (
-					sinkData.nextFrame &&
-					sinkData.nextFrame.timestamp <= targetTime + 0.05 // Tolerance
-				) {
+				if (sinkData.nextFrame) {
+					if (sinkData.nextFrame.timestamp > targetTime + FRAME_TIME_EPSILON) {
+						return sinkData.currentFrame;
+					}
 					sinkData.currentFrame = sinkData.nextFrame;
 					sinkData.nextFrame = null;
 				} else {
 					const { value: frame, done } = await sinkData.iterator.next();
 
 					if (done || !frame) break;
+					if (frame.timestamp > targetTime + FRAME_TIME_EPSILON) {
+						sinkData.nextFrame = frame;
+						return sinkData.currentFrame;
+					}
 
 					sinkData.currentFrame = frame;
 				}
@@ -148,7 +166,6 @@ export class VideoCache {
 					return frame;
 				}
 
-				if (frame.timestamp > targetTime + 1.0) break;
 			}
 		} catch (error) {
 			console.warn("Iterator failed, will restart:", error);
@@ -215,6 +232,7 @@ export class VideoCache {
 
 		try {
 			const { value: frame, done } = await sinkData.iterator.next();
+			if (sinkData.disposed) return;
 
 			if (done || !frame) {
 				sinkData.prefetching = false;
@@ -226,7 +244,7 @@ export class VideoCache {
 			sinkData.prefetching = false;
 			sinkData.prefetchPromise = null;
 		} catch (error) {
-			console.warn("Prefetch failed:", error);
+			if (!sinkData.disposed) console.warn("Prefetch failed:", error);
 			sinkData.prefetching = false;
 			sinkData.prefetchPromise = null;
 			sinkData.iterator = null;
@@ -292,6 +310,7 @@ export class VideoCache {
 				lastTime: -1,
 				prefetching: false,
 				prefetchPromise: null,
+				disposed: false,
 			});
 		} catch (error) {
 			input.dispose();
@@ -303,9 +322,12 @@ export class VideoCache {
 	clearVideo({ mediaId }: { mediaId: string }): void {
 		const sinkData = this.sinks.get(mediaId);
 		if (sinkData) {
+			sinkData.disposed = true;
 			if (sinkData.iterator) {
-				void sinkData.iterator.return();
+				void sinkData.iterator.return().catch(() => {});
 			}
+			sinkData.currentFrame = null;
+			sinkData.nextFrame = null;
 
 			sinkData.input.dispose();
 			this.sinks.delete(mediaId);

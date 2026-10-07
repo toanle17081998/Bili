@@ -2,6 +2,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadDubbingTiming } from "./timing";
 
+test("Rust bounds translation retries and respects upstream cooldowns", async () => {
+	const rust = await loadDubbingTiming();
+	assert.equal(rust.translation_request_interval_ms(), 1000);
+	assert.equal(rust.translation_memory_cache_entries(), 512);
+	assert.equal(rust.translation_retry_delay_ms(429, 0, 0), 5000);
+	assert.equal(rust.translation_retry_delay_ms(429, 1, 0), 10000);
+	assert.equal(rust.translation_retry_delay_ms(429, 0, 20000), 20000);
+	assert.equal(rust.translation_retry_delay_ms(503, 1, 0), 4000);
+	assert.equal(rust.translation_retry_delay_ms(0, 0, 0), 2000);
+	assert.equal(rust.translation_retry_delay_ms(429, 2, 0), -1);
+	assert.equal(rust.translation_retry_delay_ms(429, 0, 31000), -1);
+	assert.equal(rust.translation_retry_delay_ms(400, 0, 0), -1);
+	assert.equal(rust.translation_cooldown_ms(0), 60000);
+	assert.equal(rust.translation_cooldown_ms(120000), 120000);
+});
+
 test("Rust dubbing plan respects source boundaries, following speech and video end", async () => {
 	const rust = await loadDubbingTiming();
 	assert.equal(rust.dubbing_slot_end(2, 6, 5, 20), 5);
