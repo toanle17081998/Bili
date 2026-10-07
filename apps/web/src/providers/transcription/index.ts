@@ -10,9 +10,11 @@ export interface TranscriptionProvider {
 export class GeminiTranscriptionProvider implements TranscriptionProvider {
 	readonly name = "gemini";
 	private apiKey: string;
+	private readonly sourcePrompt?: string;
 
-	constructor(apiKey?: string) {
+	constructor({ apiKey, prompt }: { apiKey?: string; prompt?: string } = {}) {
 		this.apiKey = apiKey || process.env.GEMINI_API_KEY || "";
+		this.sourcePrompt = prompt;
 	}
 
 	async transcribe(audioPath: string): Promise<TranscriptSegment[]> {
@@ -23,7 +25,7 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
 		const audioBuffer = await fs.readFile(audioPath);
 		const base64Audio = audioBuffer.toString("base64");
 
-		const prompt = `
+		const prompt = this.sourcePrompt ?? `
 Hãy nghe file âm thanh này và tạo transcript tiếng Trung/gốc chính xác từng mốc thời gian (start, end tính bằng giây).
 Trả về JSON array duy nhất với cấu trúc:
 [
@@ -103,7 +105,7 @@ export class WhisperTranscriptionProvider implements TranscriptionProvider {
 		}
 
 		const data = await response.json();
-		return (data.segments || []).map((s: any) => ({
+		return (data.segments || []).map((s: { start: number; end: number; text: string }) => ({
 			start: s.start,
 			end: s.end,
 			text: s.text.trim(),

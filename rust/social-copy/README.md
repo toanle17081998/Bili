@@ -5,6 +5,14 @@ It builds the Vietnamese AI prompt, produces explicitly labeled quick drafts, an
 normalizes generated titles, captions, and hashtags. The web app owns provider HTTP
 transport, input/output decoding, editing, clipboard access, and browser persistence.
 
+The Caption & tag panel automatically uses visible timeline subtitles. Without
+subtitles it mixes the timeline audio and uploads an Opus/WebM audio file for speech
+recognition. The Rust policy supplies the original-language transcription prompt
+and orders/bounds transcript content before generating social posts. Speech
+recognition uses Gemini, OpenAI Whisper, or local Faster Whisper, without requiring
+the dubbing/TTS service. Saved posts and manual edits are retained when reopening
+the panel; the regenerate button uses the current timeline.
+
 From the repository root:
 
 ```sh

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, LoaderCircle, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Select,
 	SelectContent,
@@ -17,6 +18,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEditor } from "@/editor/use-editor";
 import { useLocalStorage } from "@/services/storage/use-local-storage";
+import type { SceneTracks } from "@/timeline";
 import type {
 	SocialCopyResult,
 	SocialPlatform,
@@ -34,6 +36,8 @@ interface SavedCopy {
 	content: string;
 	tone: SocialTone;
 	result: SocialCopyResult | null;
+	automatic?: boolean;
+	detectedContent?: string;
 }
 
 const PLATFORMS = [
@@ -57,19 +61,35 @@ const PLATFORMS = [
 export function SocialCopyPanel({ projectId }: { projectId: string }) {
 	const editor = useEditor();
 	const projectName = useEditor((e) => e.project.getActive().metadata.name);
+	const scene = useEditor((e) => e.scenes.getActiveSceneOrNull());
 	const [saved, setSaved, isReady] = useLocalStorage<SavedCopy>({
 		key: `social-copy:v1:${projectId}`,
 		defaultValue: {
-			title: projectName.slice(0, 300),
+			title: "",
 			content: "",
 			tone: "engaging",
 			result: null,
+			automatic: true,
 		},
 	});
 	const [platform, setPlatform] = useState<SocialPlatform>("tiktok");
 	const [isGenerating, setIsGenerating] = useState(false);
 	const [error, setError] = useState("");
+	const [status, setStatus] = useState("");
 	const requestRef = useRef<AbortController | null>(null);
+	const transcriptRef = useRef<{ tracks: SceneTracks; content: string } | null>(null);
+	const attemptedAutoRef = useRef(false);
+	const automatic = saved.automatic ?? !saved.content.trim();
+	const timelineContent = useMemo(() =>
+		scene?.tracks.overlay
+			.flatMap((track) => track.type === "text" && !track.hidden ? track.elements : [])
+			.filter((element) => !element.hidden && typeof element.params.content === "string")
+			.sort((a, b) => a.startTime - b.startTime)
+			.map((element) => String(element.params.content).trim())
+			.filter(Boolean).join("\n").slice(0, 12000) ?? "",
+		[scene],
+	);
+	const content = automatic ? timelineContent || saved.detectedContent || "" : saved.content;
 
 	useEffect(function cancelOnUnmount() {
 		return () => requestRef.current?.abort();
@@ -80,43 +100,52 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 	};
 
 	const useSubtitles = () => {
-		const scene = editor.scenes.getActiveSceneOrNull();
-		const subtitles =
-			scene?.tracks.overlay
-				.flatMap((track) =>
-					track.type === "text" && !track.hidden ? track.elements : [],
-				)
-				.filter(
-					(element) =>
-						!element.hidden && typeof element.params.content === "string",
-				)
-				.sort((a, b) => a.startTime - b.startTime)
-				.map((element) => String(element.params.content).trim())
-				.filter(Boolean)
-				.join("\n") ?? "";
-		if (!subtitles) {
+		if (!timelineContent) {
 			toast.info(
 				"Chưa có phụ đề trên timeline. Hãy nhập mô tả video hoặc tạo phụ đề ở tab AI Việt hóa.",
 			);
 			return;
 		}
-		updateForm({ content: subtitles.slice(0, 12000) });
+		updateForm({ content: timelineContent, automatic: false });
 		toast.success("Đã lấy nội dung chữ/phụ đề từ timeline.");
 	};
 
-	const generate = async () => {
-		if (isGenerating) return;
+	const generate = useCallback(async () => {
+		if (requestRef.current) return;
 		setError("");
 		setIsGenerating(true);
 		const controller = new AbortController();
 		requestRef.current = controller;
 		try {
+			let sourceContent = automatic ? timelineContent : saved.content;
+			if (automatic && !sourceContent) {
+				const activeScene = editor.scenes.getActiveSceneOrNull();
+				if (!activeScene) throw new Error("Chưa có video trên timeline.");
+				if (transcriptRef.current?.tracks === activeScene.tracks) {
+					sourceContent = transcriptRef.current.content;
+				} else {
+					const { transcribeTimeline } = await import("@/social-copy/transcribe-timeline");
+					sourceContent = await transcribeTimeline({
+						tracks: activeScene.tracks,
+						mediaAssets: editor.media.getAssets(),
+						duration: editor.timeline.getTotalDuration(),
+						signal: controller.signal,
+						onStatus: (message) => { if (!controller.signal.aborted) setStatus(message); },
+					});
+					controller.signal.throwIfAborted();
+					transcriptRef.current = { tracks: activeScene.tracks, content: sourceContent };
+					setSaved({ value: (previous) => ({ ...previous, detectedContent: sourceContent }) });
+				}
+			}
+			controller.signal.throwIfAborted();
+			if (!sourceContent.trim()) throw new Error("Nhập mô tả hoặc dùng nội dung tự động từ video.");
+			setStatus("Đang viết caption và chọn hashtag theo nội dung video...");
 			const response = await fetch("/api/social-copy", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					title: saved.title,
-					content: saved.content,
+					content: sourceContent,
 					tone: saved.tone,
 				}),
 				signal: controller.signal,
@@ -125,7 +154,11 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 			if (!response.ok)
 				throw new Error(data.error || "Không thể tạo caption. Vui lòng thử lại.");
 			if (!controller.signal.aborted) {
-				updateForm({ result: SocialCopyResultSchema.parse(data) });
+				setSaved({ value: (previous) => ({
+					...previous,
+					result: SocialCopyResultSchema.parse(data),
+					...(automatic ? { detectedContent: sourceContent } : {}),
+				}) });
 				toast.success("Đã tạo caption và hashtag cho cả 3 nền tảng.");
 			}
 		} catch (cause) {
@@ -137,9 +170,22 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 				);
 			}
 		} finally {
-			if (!controller.signal.aborted) setIsGenerating(false);
+			if (requestRef.current === controller) requestRef.current = null;
+			if (!controller.signal.aborted) {
+				setIsGenerating(false);
+				setStatus("");
+			}
 		}
-	};
+	}, [automatic, timelineContent, saved.content, saved.title, saved.tone, editor, setSaved]);
+
+	useEffect(function generateFromVideoOnOpen() {
+		if (!isReady || !automatic || saved.result || attemptedAutoRef.current) return;
+		const timer = setTimeout(() => {
+			attemptedAutoRef.current = true;
+			void generate();
+		}, 0);
+		return () => clearTimeout(timer);
+	}, [isReady, automatic, saved.result, generate]);
 
 	const editPost = ({
 		id,
@@ -185,7 +231,7 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 					Caption & hashtag
 				</h3>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Tạo nội dung đăng riêng cho TikTok, Facebook Reels và YouTube Shorts.
+					Tự tạo caption và hashtag từ nội dung video cho TikTok, Facebook Reels và YouTube Shorts.
 				</p>
 			</div>
 			<form
@@ -195,28 +241,45 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 					void generate();
 				}}
 			>
+				<div className="flex items-center gap-2">
+					<Checkbox
+						id="social-auto-content"
+						checked={automatic}
+						disabled={!isReady || isGenerating}
+						onCheckedChange={(checked) => updateForm({ automatic: checked === true })}
+					/>
+					<Label htmlFor="social-auto-content">Tự động lấy nội dung video</Label>
+				</div>
+				{automatic && (
+					<p className="text-xs text-muted-foreground">
+						Ưu tiên phụ đề trên timeline; nếu chưa có, tự nhận diện lời thoại từ audio.
+					</p>
+				)}
 				<div className="space-y-1.5">
-					<Label htmlFor="social-source-title">Chủ đề / tiêu đề video</Label>
+					<Label htmlFor="social-source-title">Chủ đề / tiêu đề video (không bắt buộc)</Label>
 					<Input
 						id="social-source-title"
 						value={saved.title}
 						maxLength={300}
 						disabled={!isReady || isGenerating}
 						onChange={(event) => updateForm({ title: event.target.value })}
-						placeholder="Ví dụ: Cách nấu phở bò tại nhà"
+						placeholder={`Tự suy ra từ nội dung · ${projectName}`}
 					/>
 				</div>
 				<div className="space-y-1.5">
 					<Label htmlFor="social-source-content">Nội dung video</Label>
 					<Textarea
 						id="social-source-content"
-						value={saved.content}
+						value={content}
 						rows={5}
 						maxLength={12000}
-						required
+						required={!automatic}
+						readOnly={automatic}
 						disabled={!isReady || isGenerating}
 						onChange={(event) => updateForm({ content: event.target.value })}
-						placeholder="Mô tả nội dung, điểm nổi bật hoặc dán lời thoại/phụ đề để caption sát với video..."
+						placeholder={automatic
+							? "Nội dung lời thoại/phụ đề sẽ được lấy tự động từ video..."
+							: "Mô tả nội dung, điểm nổi bật hoặc dán lời thoại/phụ đề..."}
 					/>
 					<div className="flex flex-wrap items-center justify-between gap-1">
 						<Button
@@ -228,7 +291,7 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 							Dùng phụ đề timeline
 						</Button>
 						<span className="text-xs text-muted-foreground">
-							{saved.content.length.toLocaleString("vi-VN")} / 12.000
+							{content.length.toLocaleString("vi-VN")} / 12.000
 						</span>
 					</div>
 				</div>
@@ -254,7 +317,7 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 				</div>
 				<Button
 					type="submit"
-					disabled={!isReady || isGenerating || !saved.content.trim()}
+					disabled={!isReady || isGenerating || (!automatic && !saved.content.trim())}
 				>
 					{isGenerating ? (
 						<LoaderCircle className="animate-spin" />
@@ -268,9 +331,19 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 							: "Tạo cho 3 nền tảng"}
 				</Button>
 				{isGenerating && (
-					<p role="status" className="text-xs text-muted-foreground">
-						Đang viết caption và chọn hashtag theo nội dung video...
-					</p>
+					<>
+						<p role="status" className="text-xs text-muted-foreground">
+							{status || "Đang lấy nội dung video..."}
+						</p>
+						<Button variant="outline" onClick={() => {
+							requestRef.current?.abort();
+							requestRef.current = null;
+							setIsGenerating(false);
+							setStatus("");
+						}}>
+							Dừng tạo nội dung
+						</Button>
+					</>
 				)}
 				{error && (
 					<p role="alert" className="text-xs text-destructive">{error}</p>
@@ -389,8 +462,8 @@ export function SocialCopyPanel({ projectId }: { projectId: string }) {
 				</div>
 			) : (
 				<p className="text-xs text-muted-foreground">
-					Nhập nội dung hoặc dùng phụ đề timeline, sau đó tạo một lượt cho cả 3
-					nền tảng. Caption dùng khi đăng video, không chèn vào hình ảnh video.
+					Caption và hashtag được tạo theo lời thoại/phụ đề của video. Bạn có thể
+					chuyển sang nhập mô tả thủ công để bổ sung nội dung hình ảnh.
 				</p>
 			)}
 		</div>

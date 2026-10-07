@@ -49,3 +49,13 @@ test("WASM handles an empty source title and repeated allocation cycles", () => 
 	}
 	assert.equal(run(2, ["invalid"]), "");
 });
+
+test("WASM transcript source follows video order, excludes empty speech, and bounds Unicode content", () => {
+	assert.equal(run(4, ["2", "  Kiểm tra tải. ", "0", "Cầu LEGO.", "1", " "]), "Cầu LEGO.\nKiểm tra tải.");
+	assert.equal(run(4, ["NaN", "Invalid", "-1", "Invalid"]), "");
+	const unicode = run(4, ["0", "🍜".repeat(12001)]);
+	assert.equal(unicode.length, 12000);
+	assert.equal(Array.from(unicode).length, 6000);
+	assert.match(run(3, []), /ngôn ngữ gốc/);
+	assert.match(run(3, []), /trả về \[\]/);
+});

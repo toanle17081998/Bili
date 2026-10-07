@@ -197,18 +197,3 @@ export class FreeTranslateLLMProvider implements LLMProvider {
 		}
 	}
 }
-
-export class TranslationCooldownError extends Error {
-	readonly status: number;
-	readonly retryAfterMs: number;
-	constructor(
-		message = "Hệ thống dịch thuật đang tạm thời giới hạn tốc độ. Vui lòng thử lại sau.",
-		status = 429,
-		retryAfterMs = 5000,
-	) {
-		super(message);
-		this.name = "TranslationCooldownError";
-		this.status = status;
-		this.retryAfterMs = retryAfterMs;
-	}
-}

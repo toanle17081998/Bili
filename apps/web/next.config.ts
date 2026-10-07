@@ -12,6 +12,10 @@ const nextConfig: NextConfig = {
 	outputFileTracingIncludes: {
 		"/api/localization/process": ["../../rust/crates/localization/timing.wasm"],
 		"/api/social-copy": ["../../rust/social-copy/social-copy.wasm"],
+		"/api/social-copy/transcript": [
+			"../../rust/social-copy/social-copy.wasm",
+			"../../rust/crates/localization/timing.wasm",
+		],
 		"/api/media/watermark-removals": [
 			"../../rust/crates/watermark/watermark.wasm",
 		],
