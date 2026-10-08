@@ -156,6 +156,7 @@ export async function translateInBatches({
 		catch (error) { if (!(error instanceof TranslationResponseError)) throw error; }
 	};
 	const pending = inputs.filter((input) => !completed.has(input.id));
+	const batches: TranslationInput[][] = [];
 	for (let offset = 0; offset < pending.length;) {
 		const batch: TranslationInput[] = [];
 		let chars = 0;
@@ -164,6 +165,9 @@ export async function translateInBatches({
 			batch.push(input);
 			chars += input.source.text.length;
 		}
+		batches.push(batch);
+	}
+	const translateBatch = async (batch: TranslationInput[]) => {
 		await translate(batch);
 		for (const input of batch) {
 			for (let attempt = 0; !completed.has(input.id) && attempt < policy.translation_llm_repair_attempts(); attempt++) {
@@ -173,6 +177,13 @@ export async function translateInBatches({
 				`LLM chưa dịch được đoạn ${input.id + 1} tại ${input.source.start.toFixed(1)}s. Kiểm tra model/dịch vụ LLM hoặc thử lại; các đoạn đã dịch được lưu cache.`,
 			);
 		}
+	};
+	const concurrency = policy.translation_llm_concurrency();
+	for (let offset = 0; offset < batches.length; offset += concurrency) {
+		// Drain this wave before surfacing an error so completed rows are cached and
+		// no requests keep running after the caller retries a failed job.
+		const results = await Promise.allSettled(batches.slice(offset, offset + concurrency).map(translateBatch));
+		for (const result of results) if (result.status === "rejected") throw result.reason;
 	}
 	return inputs.map(({ id, source }) => ({
 		sourceStart: source.start, sourceEnd: source.end, sourceText: source.text,

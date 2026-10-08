@@ -115,6 +115,10 @@ pub extern "C" fn translation_llm_output_tokens() -> u32 { 4096 }
 #[unsafe(no_mangle)]
 pub extern "C" fn translation_llm_repair_attempts() -> u32 { 2 }
 
+/// Keep keyed translation requests bounded to avoid flooding upstream services.
+#[unsafe(no_mangle)]
+pub extern "C" fn translation_llm_concurrency() -> u32 { 2 }
+
 #[unsafe(no_mangle)]
 pub extern "C" fn translation_llm_same_span(start: f64, end: f64, other_start: f64, other_end: f64) -> i32 {
     i32::from([start, end, other_start, other_end].iter().all(|v| v.is_finite())

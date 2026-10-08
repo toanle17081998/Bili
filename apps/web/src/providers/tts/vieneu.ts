@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { FFmpegService } from "@/media/ffmpeg";
 import { prepareSpeechText } from "@/localization/timing";
 import {
@@ -28,6 +29,7 @@ export class VieNeuTTSProvider implements TTSProvider {
 	private readonly apiKey: string;
 	private readonly fetchImpl: typeof fetch;
 	private readonly wait: (ms: number) => Promise<void>;
+	private readonly cacheDirectory: string | false;
 
 	constructor({
 		endpoint = process.env.VIENEU_ENDPOINT ?? DEFAULT_ENDPOINT,
@@ -35,18 +37,21 @@ export class VieNeuTTSProvider implements TTSProvider {
 		apiKey = process.env.VIENEU_API_KEY ?? "x",
 		fetchImpl = fetch,
 		wait = async (ms) => { if (ms > 0) await sleep(ms); },
+		cacheDirectory = path.join(process.cwd(), ".local_storage", "speech", "vieneu"),
 	}: {
 		endpoint?: string;
 		model?: string;
 		apiKey?: string;
 		fetchImpl?: typeof fetch;
 		wait?: (ms: number) => Promise<void>;
+		cacheDirectory?: string | false;
 	} = {}) {
 		this.endpoint = endpoint.trim().replace(/\/+$/, "");
 		this.model = model.trim();
 		this.apiKey = apiKey.trim();
 		this.fetchImpl = fetchImpl;
 		this.wait = wait;
+		this.cacheDirectory = cacheDirectory;
 		this.cacheNamespace = `vieneu:${this.endpoint}:${this.model}:v1`;
 	}
 
@@ -98,6 +103,21 @@ export class VieNeuTTSProvider implements TTSProvider {
 			response_format: "wav",
 			speed,
 		});
+		const cacheFile = this.cacheDirectory ? path.join(this.cacheDirectory,
+			`${createHash("sha256").update(`${this.cacheNamespace}\0${body}`).digest("hex")}.wav`) : undefined;
+		let cachedDuration: number | undefined;
+		if (cacheFile) {
+			try {
+				await fs.access(cacheFile);
+				cachedDuration = (await FFmpegService.probeVideo(cacheFile)).duration;
+			}
+			catch { /* Missing or invalid audio is synthesized again. */ }
+		}
+		if (cachedDuration !== undefined && cacheFile) {
+			await fs.mkdir(path.dirname(request.outputPath), { recursive: true });
+			await fs.copyFile(cacheFile, request.outputPath);
+			return { audioPath: request.outputPath, duration: cachedDuration };
+		}
 
 		for (let attempt = 0; ; attempt++) {
 			let response: Response;
@@ -124,12 +144,23 @@ export class VieNeuTTSProvider implements TTSProvider {
 				if (!wav.length) throw new SpeechProviderError({ provider: "VieNeu (audio trống)", status: 502 });
 				await fs.mkdir(path.dirname(request.outputPath), { recursive: true });
 				await fs.writeFile(request.outputPath, wav);
+				let duration: number;
 				try {
-					const probe = await FFmpegService.probeVideo(request.outputPath);
-					return { audioPath: request.outputPath, duration: probe.duration };
+					duration = (await FFmpegService.probeVideo(request.outputPath)).duration;
 				} catch {
 					throw new SpeechProviderError({ provider: "VieNeu (audio không hợp lệ)", status: 502 });
 				}
+				if (cacheFile) {
+					const temporary = `${cacheFile}.${randomUUID()}.tmp`;
+					try {
+						await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+						await fs.writeFile(temporary, wav);
+						await fs.rename(temporary, cacheFile);
+					} catch {
+						console.warn("Không lưu được cache giọng đọc; vẫn dùng audio đã tạo.");
+					} finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+				}
+				return { audioPath: request.outputPath, duration };
 			}
 
 			const headerRetryAfter = Number(response.headers.get("Retry-After")) * 1000 || 0;

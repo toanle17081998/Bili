@@ -7,7 +7,7 @@ import { z } from "zod";
 import { OpenAILLMProvider, GeminiLLMProvider } from "./index";
 import { TranslationCooldownError } from "./free-translate";
 import type { TranscriptSegment } from "@/localization/schemas";
-import { translationPrompt } from "./batched-translation";
+import { translationPrompt, translateInBatches } from "./batched-translation";
 
 test("the shipped Rust prompt requests playful adaptation while preserving facts and dubbing constraints", async () => {
 	const source = { start: 0, end: 3, text: "齿轮卡住了" };
@@ -25,6 +25,50 @@ const transcript = (count: number): TranscriptSegment[] => Array.from({ length: 
 	start: index * 3, end: index * 3 + 2, text: `原文 ${index}`,
 }));
 const reply = (content: unknown) => Response.json({ choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) }, finish_reason: "stop" }] });
+test("translation overlaps two batches, bounds concurrency, and restores order after out-of-order completion", async () => {
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const calls: number[][] = [];
+	const finished: number[] = [];
+	let active = 0;
+	let peak = 0;
+	const job = translateInBatches({ segments: transcript(19), namespace: "test", cacheDirectory: false,
+		request: async ({ inputs }) => {
+			calls.push(inputs.map(({ id }) => id));
+			peak = Math.max(peak, ++active);
+			if (inputs[0].id === 0) await gate;
+			finished.push(inputs[0].id);
+			active--;
+			return inputs.map(({ id }) => ({ id, vietnameseText: `Dịch ${id}` }));
+		},
+	});
+	try {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.ok(calls.length >= 2, "a second batch must start before the first finishes");
+		assert.equal(peak, 2);
+		assert.ok(finished.includes(6));
+	} finally { release(); await job; }
+	const result = await job;
+	assert.equal(peak, 2);
+	assert.deepEqual(result.map(({ vietnameseText }) => vietnameseText), transcript(19).map((_, id) => `Dịch ${id}`));
+});
+
+test("an upstream failure drains in-flight translation without starting later batches", async () => {
+	const calls: number[] = [];
+	let inFlightFinished = false;
+	await assert.rejects(translateInBatches({ segments: transcript(19), namespace: "test", cacheDirectory: false,
+		request: async ({ inputs }) => {
+			calls.push(inputs[0].id);
+			if (inputs[0].id === 0) throw new Error("upstream limited");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			inFlightFinished = true;
+			return inputs.map(({ id }) => ({ id, vietnameseText: `Dịch ${id}` }));
+		},
+	}), /upstream limited/);
+	assert.deepEqual(calls, [0, 6]);
+	assert.equal(inFlightFinished, true);
+});
+
 function inputsFromRequest(options?: RequestInit) {
 	const envelope = JSON.parse(String(options?.body));
 	assert.equal(envelope.response_format.type, "json_object");

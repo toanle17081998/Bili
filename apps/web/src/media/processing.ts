@@ -161,7 +161,11 @@ export async function processMediaAssets({
 					});
 				}
 			} else if (fileType === "audio") {
-				duration = await getMediaDuration({ file });
+				try {
+					duration = await getMediaDuration({ file });
+				} catch (err) {
+					console.warn(`Could not determine duration for audio file ${file.name}:`, err);
+				}
 			}
 
 			processedAssets.push({
@@ -201,16 +205,27 @@ const getMediaDuration = ({ file }: { file: File }): Promise<number> => {
 		) as HTMLVideoElement;
 		const objectUrl = URL.createObjectURL(file);
 
-		element.addEventListener("loadedmetadata", () => {
-			resolve(element.duration);
+		const cleanup = () => {
 			URL.revokeObjectURL(objectUrl);
 			element.remove();
+		};
+
+		const timeoutId = setTimeout(() => {
+			cleanup();
+			reject(new Error("Timeout loading media metadata"));
+		}, 8000);
+
+		element.addEventListener("loadedmetadata", () => {
+			clearTimeout(timeoutId);
+			const duration = element.duration;
+			cleanup();
+			resolve(duration);
 		});
 
 		element.addEventListener("error", () => {
+			clearTimeout(timeoutId);
+			cleanup();
 			reject(new Error("Could not load media"));
-			URL.revokeObjectURL(objectUrl);
-			element.remove();
 		});
 
 		element.src = objectUrl;

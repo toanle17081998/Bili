@@ -30,7 +30,7 @@ test("VieNeu sends OpenAI-compatible request and writes decodable WAV", async ()
 			assert.equal(body.response_format, "wav");
 			return new Response(audio, { headers: { "Content-Type": "audio/wav" } });
 		}, { preconnect: fetch.preconnect });
-		const provider = new VieNeuTTSProvider({ fetchImpl, wait: async () => {} });
+		const provider = new VieNeuTTSProvider({ fetchImpl, cacheDirectory: false, wait: async () => {} });
 		const outputPath = path.join(directory, "voice.wav");
 		const result = await provider.generateSpeech({ text: "Xin chào", voice: "vi-VN-HoaiMyNeural", outputPath });
 		assert.ok(result.duration > 0);
@@ -49,7 +49,7 @@ test("VieNeu maps Edge TTS voice IDs and falls back to default for unknown voice
 			seenVoices.push(body.voice);
 			return new Response(audio);
 		}, { preconnect: fetch.preconnect });
-		const provider = new VieNeuTTSProvider({ fetchImpl, wait: async () => {} });
+		const provider = new VieNeuTTSProvider({ fetchImpl, cacheDirectory: false, wait: async () => {} });
 		await provider.generateSpeech({ text: "A", voice: "vi-VN-HoaiMyNeural", outputPath: path.join(directory, "a.wav") });
 		await provider.generateSpeech({ text: "B", voice: "vi-VN-NamMinhNeural", outputPath: path.join(directory, "b.wav") });
 		await provider.generateSpeech({ text: "C", voice: "Mai Anh", outputPath: path.join(directory, "c.wav") });
@@ -82,7 +82,7 @@ test("VieNeu retries 429 with exponential backoff and honors Retry-After", async
 			if (calls <= 2) return new Response("busy", { status: 429, headers: { "Retry-After": "1" } });
 			return new Response(audio);
 		}, { preconnect: fetch.preconnect });
-		const provider = new VieNeuTTSProvider({ fetchImpl, wait: async (ms) => { waits.push(ms); } });
+		const provider = new VieNeuTTSProvider({ fetchImpl, cacheDirectory: false, wait: async (ms) => { waits.push(ms); } });
 		const result = await provider.generateSpeech({ text: "Xin chào", outputPath: path.join(directory, "voice.wav") });
 		assert.ok(result.duration > 0);
 		assert.equal(calls, 3);
@@ -94,7 +94,7 @@ test("VieNeu gives up after MAX_RETRIES on persistent 429", async () => {
 	const fetchImpl: typeof fetch = Object.assign(async () =>
 		new Response("busy", { status: 429, headers: { "Retry-After": "0" } }),
 		{ preconnect: fetch.preconnect });
-	const provider = new VieNeuTTSProvider({ fetchImpl, wait: async () => {} });
+	const provider = new VieNeuTTSProvider({ fetchImpl, cacheDirectory: false, wait: async () => {} });
 	await assert.rejects(provider.generateSpeech({ text: "Xin chào", outputPath: "/tmp/x.wav" }), (error: unknown) =>
 		error instanceof SpeechProviderError && error.status === 429);
 });
@@ -107,12 +107,65 @@ test("VieNeu rejects empty text and surfaces server errors with Retry-After", as
 	const fetchImpl: typeof fetch = Object.assign(async () =>
 		new Response("rate limited", { status: 429, headers: { "Retry-After": "5" } }),
 		{ preconnect: fetch.preconnect });
-	const limited = new VieNeuTTSProvider({ fetchImpl, wait: async () => {} });
+	const limited = new VieNeuTTSProvider({ fetchImpl, cacheDirectory: false, wait: async () => {} });
 	await assert.rejects(limited.generateSpeech({ text: "Xin chào", outputPath: "/tmp/x.wav" }), (error: unknown) =>
 		error instanceof SpeechProviderError && error.status === 429 && error.retryAfterMs === 5000);
 
 	const down: typeof fetch = Object.assign(async () => { throw new TypeError("fetch failed"); }, { preconnect: fetch.preconnect });
-	const offline = new VieNeuTTSProvider({ fetchImpl: down, wait: async () => {} });
+	const offline = new VieNeuTTSProvider({ fetchImpl: down, cacheDirectory: false, wait: async () => {} });
 	await assert.rejects(offline.generateSpeech({ text: "Xin chào", outputPath: "/tmp/x.wav" }), (error: unknown) =>
 		error instanceof SpeechProviderError && error.status === 0);
+});
+
+test("VieNeu reuses validated speech across runs and invalidates on voice, text, speed or model changes", async () => {
+	await withDirectory(async (directory) => {
+		const fixture = path.join(directory, "fixture.wav");
+		await FFmpegService.runCommand("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", fixture]);
+		const audio = await fs.readFile(fixture);
+		let calls = 0;
+		const fetchImpl: typeof fetch = Object.assign(async () => { calls++; return new Response(audio); }, { preconnect: fetch.preconnect });
+		const options = { fetchImpl, cacheDirectory: path.join(directory, "cache"), wait: async () => {} };
+		const request = { text: "Xin chào", voice: "Ngọc Huyền", outputPath: path.join(directory, "first.wav") };
+		await new VieNeuTTSProvider(options).generateSpeech(request);
+		const secondPath = path.join(directory, "second.wav");
+		await new VieNeuTTSProvider(options).generateSpeech({ ...request, voice: "vi-VN-HoaiMyNeural", outputPath: secondPath });
+		assert.equal(calls, 1, "voice aliases and a new output path must reuse the same synthesis");
+		assert.deepEqual(await fs.readFile(secondPath), audio);
+		for (const patch of [{ voice: "Hải Đăng" }, { text: "Nội dung mới" }, { speed: 1.2 }]) {
+			await new VieNeuTTSProvider(options).generateSpeech({ ...request, ...patch });
+		}
+		await new VieNeuTTSProvider({ ...options, model: "different-model" }).generateSpeech(request);
+		await new VieNeuTTSProvider({ ...options, endpoint: "http://other-server/v1/audio/speech" }).generateSpeech(request);
+		assert.equal(calls, 6);
+		for (const file of await fs.readdir(options.cacheDirectory)) {
+			await fs.writeFile(path.join(options.cacheDirectory, file), "corrupt");
+		}
+		await new VieNeuTTSProvider(options).generateSpeech(request);
+		assert.equal(calls, 7, "invalid cached audio must be regenerated");
+	});
+});
+
+test("VieNeu never caches upstream failures or undecodable audio", async () => {
+	await withDirectory(async (directory) => {
+		const fixture = path.join(directory, "fixture.wav");
+		await FFmpegService.runCommand("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", fixture]);
+		const audio = await fs.readFile(fixture);
+		const cacheDirectory = path.join(directory, "cache");
+		await fs.mkdir(cacheDirectory);
+		let calls = 0;
+		const fetchImpl: typeof fetch = Object.assign(async () => {
+			calls++;
+			return calls === 1 ? new Response("unavailable", { status: 503 })
+				: calls === 2 ? new Response("invalid audio") : new Response(audio);
+		}, { preconnect: fetch.preconnect });
+		const provider = new VieNeuTTSProvider({ fetchImpl, cacheDirectory });
+		const request = { text: "Xin chào", outputPath: path.join(directory, "voice.wav") };
+		for (const status of [503, 502]) {
+			await assert.rejects(provider.generateSpeech(request), (error: unknown) => error instanceof SpeechProviderError && error.status === status);
+			assert.deepEqual(await fs.readdir(cacheDirectory), []);
+		}
+		await provider.generateSpeech(request);
+		await provider.generateSpeech(request);
+		assert.equal(calls, 3);
+	});
 });

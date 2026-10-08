@@ -352,6 +352,8 @@ export class LocalizationPipeline {
 			subtitles,
 		};
 
+		await fs.writeFile(path.join(outDir, "latest-project.json"), JSON.stringify(result, null, 2));
+
 		return LocalizedVideoProjectSchema.parse(result);
 	}
 }

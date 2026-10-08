@@ -36,6 +36,16 @@ set to `small` for higher quality at additional CPU cost. Separation can leave v
 residue or affect background effects; its output is never silently substituted with
 the original mix. Failed transcription, translation and TTS are surfaced as errors.
 
+Separation automatically uses CUDA when the selected Python environment has a
+CUDA-enabled PyTorch installation and a compatible GPU; otherwise it uses CPU.
+Set `DEMUCS_DEVICE=cpu` to force CPU, or `DEMUCS_DEVICE=cuda` to require CUDA.
+Installing the CPU-only PyTorch wheels above keeps separation on CPU.
+
+Keyed LLM translation runs up to two bounded batches concurrently, with the limit
+owned by Rust. Source IDs preserve the original order even if responses finish
+out of order. In-flight batches finish caching before an error is returned; later
+waves are not started after a failure.
+
 Free translation shares a serial request queue across preview/process jobs, spaces
 requests by at least one second and retries transient errors at most twice. Rust
 owns the pacing, retry and cooldown policy. Retry-After is respected, including

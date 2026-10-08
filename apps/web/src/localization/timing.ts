@@ -20,6 +20,7 @@ interface TimingExports {
 	translation_llm_batch_can_add(count: number, chars: number, nextChars: number): number;
 	translation_llm_output_tokens(): number;
 	translation_llm_repair_attempts(): number;
+	translation_llm_concurrency(): number;
 	translation_llm_same_span(start: number, end: number, otherStart: number, otherEnd: number): number;
 	translation_llm_prompt_ptr(): number;
 	translation_llm_prompt_len(): number;
@@ -36,6 +37,7 @@ function isTimingExports(exports: WebAssembly.Exports): exports is WebAssembly.E
 		exports.translation_retry_delay_ms, exports.translation_memory_cache_entries,
 		exports.translation_llm_batch_can_add, exports.translation_llm_output_tokens,
 		exports.translation_llm_repair_attempts, exports.translation_llm_same_span,
+		exports.translation_llm_concurrency,
 		exports.translation_llm_prompt_ptr, exports.translation_llm_prompt_len,
 	].every((value) => typeof value === "function");
 }

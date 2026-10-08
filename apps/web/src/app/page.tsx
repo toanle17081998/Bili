@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
+import { cn } from "@/utils/ui";
 import { filterSearchResults } from "@/source/search-filter";
 import type { SearchResult } from "@/source/types";
 
@@ -59,6 +60,27 @@ export default function HomePage() {
 	const [loadMoreError, setLoadMoreError] = useState("");
 	const requestRef = useRef<AbortController | null>(null);
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
+	const searchSentinelRef = useRef<HTMLDivElement | null>(null);
+	const [isScrolled, setIsScrolled] = useState(false);
+
+	useEffect(() => {
+		const sentinel = searchSentinelRef.current;
+		if (!sentinel) return;
+
+		const observer = new IntersectionObserver(
+			([entry]) => {
+				setIsScrolled(!entry.isIntersecting);
+			},
+			{
+				rootMargin: "-64px 0px 0px 0px",
+			},
+		);
+
+		observer.observe(sentinel);
+		return () => {
+			observer.disconnect();
+		};
+	}, []);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -102,6 +124,10 @@ export default function HomePage() {
 
 		if (customQuery !== undefined) {
 			setSearchQuery(customQuery);
+		}
+
+		if (typeof window !== "undefined" && window.scrollY > 80) {
+			window.scrollTo({ top: 0, behavior: "smooth" });
 		}
 
 		requestRef.current?.abort();
@@ -270,7 +296,7 @@ export default function HomePage() {
 								Beta
 							</span>
 						</h1>
-						<p className="text-xs text-neutral-400">
+						<p className="text-xs text-neutral-400 hidden sm:block">
 							Tự động hóa chuyển ngữ video Bilibili sang TikTok / Shorts 9:16
 						</p>
 					</div>
@@ -285,58 +311,78 @@ export default function HomePage() {
 				</div>
 			</header>
 
-			{/* Hero & Search Section */}
-			<main className="flex-1 max-w-6xl w-full mx-auto px-6 py-12 flex flex-col gap-10">
-				<div className="text-center max-w-4xl mx-auto flex flex-col items-center gap-4">
-					{/* Badge */}
-					<div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium shadow-sm backdrop-blur-sm">
-						<HugeiconsIcon
-							icon={SparklesIcon}
-							className="size-3.5 animate-pulse"
-						/>
-						Công nghệ AI chuyển ngữ & lồng tiếng video Bilibili
+			{/* Main Content */}
+			<main className="flex-1 w-full flex flex-col">
+				{/* Hero & Title Section */}
+				<div className="max-w-6xl w-full mx-auto px-6 pt-12 pb-2">
+					<div className="text-center max-w-4xl mx-auto flex flex-col items-center gap-4">
+						{/* Badge */}
+						<div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium shadow-sm backdrop-blur-sm">
+							<HugeiconsIcon
+								icon={SparklesIcon}
+								className="size-3.5 animate-pulse"
+							/>
+							Công nghệ AI chuyển ngữ & lồng tiếng video Bilibili
+						</div>
+
+						{/* Title */}
+						<h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight">
+							Biến Video Bilibili Thành Clip{" "}
+							<span className="bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-400 bg-clip-text text-transparent">
+								Viral 9:16
+							</span>
+						</h2>
+
+						{/* Subtitle */}
+						<p className="text-sm sm:text-base text-neutral-400 max-w-2xl leading-relaxed">
+							Dán link, mã BV hoặc nhập từ khóa để tự động dịch thuật ngữ cảnh,
+							lồng tiếng AI tiếng Việt truyền cảm và xuất video dọc TikTok / Reels
+							chỉ trong vài phút.
+						</p>
 					</div>
+				</div>
 
-					{/* Title */}
-					<h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight">
-						Biến Video Bilibili Thành Clip{" "}
-						<span className="bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-400 bg-clip-text text-transparent">
-							Viral 9:16
-						</span>
-					</h2>
+				{/* Sentinel for sticky search bar */}
+				<div ref={searchSentinelRef} className="h-0 w-full pointer-events-none" />
 
-					{/* Subtitle */}
-					<p className="text-sm sm:text-base text-neutral-400 max-w-2xl leading-relaxed">
-						Dán link, mã BV hoặc nhập từ khóa để tự động dịch thuật ngữ cảnh,
-						lồng tiếng AI tiếng Việt truyền cảm và xuất video dọc TikTok / Reels
-						chỉ trong vài phút.
-					</p>
-
-					{/* Search Form - Wide, modern & roomy */}
-					<form
-						onSubmit={handleSearch}
-						className="mt-2 w-full max-w-3xl flex items-center gap-2 sm:gap-3 bg-neutral-900/90 p-2 rounded-2xl border border-neutral-800 shadow-2xl focus-within:border-rose-500/60 focus-within:ring-4 focus-within:ring-rose-500/10 transition backdrop-blur-md"
-					>
-						<HugeiconsIcon
-							icon={Search01Icon}
-							className="size-5 text-neutral-400 ml-3 shrink-0"
-						/>
-						<Input
-							value={searchQuery}
-							onChange={(e) => setSearchQuery(e.target.value)}
-							placeholder="Dán link Bilibili, mã BV (ví dụ: BV18RHZ6TEeC) hoặc từ khóa tìm kiếm..."
-							containerClassName="flex-1 min-w-0"
-							className="bg-transparent border-none text-neutral-100 placeholder:text-neutral-500 focus-visible:ring-0 text-sm sm:text-base px-2 h-11 w-full shadow-none"
-						/>
-						<Button
-							type="submit"
-							disabled={isSearching}
-							className="h-11 px-6 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-600 active:scale-95 text-white font-medium text-sm flex items-center gap-2 shadow-lg shadow-rose-900/30 transition shrink-0"
+				{/* Sticky Search Bar Section */}
+				<div
+					className={cn(
+						"sticky top-16 z-30 w-full transition-all duration-200",
+						isScrolled
+							? "bg-neutral-950/90 backdrop-blur-md border-b border-neutral-800/80 py-3 shadow-xl shadow-black/40"
+							: "bg-transparent border-b border-transparent py-2",
+					)}
+				>
+					<div className="max-w-3xl mx-auto px-6">
+						<form
+							onSubmit={handleSearch}
+							className="w-full flex items-center gap-2 sm:gap-3 bg-neutral-900/90 p-2 rounded-2xl border border-neutral-800 shadow-2xl focus-within:border-rose-500/60 focus-within:ring-4 focus-within:ring-rose-500/10 transition backdrop-blur-md"
 						>
-							{isSearching ? "Đang tìm..." : "Tìm kiếm"}
-						</Button>
-					</form>
+							<HugeiconsIcon
+								icon={Search01Icon}
+								className="size-5 text-neutral-400 ml-3 shrink-0"
+							/>
+							<Input
+								value={searchQuery}
+								onChange={(e) => setSearchQuery(e.target.value)}
+								placeholder="Dán link Bilibili, mã BV (ví dụ: BV18RHZ6TEeC) hoặc từ khóa tìm kiếm..."
+								containerClassName="flex-1 min-w-0"
+								className="bg-transparent border-none text-neutral-100 placeholder:text-neutral-500 focus-visible:ring-0 text-sm sm:text-base px-2 h-11 w-full shadow-none"
+							/>
+							<Button
+								type="submit"
+								disabled={isSearching}
+								className="h-11 px-6 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-600 active:scale-95 text-white font-medium text-sm flex items-center gap-2 shadow-lg shadow-rose-900/30 transition shrink-0"
+							>
+								{isSearching ? "Đang tìm..." : "Tìm kiếm"}
+							</Button>
+						</form>
+					</div>
+				</div>
 
+				{/* Filter & Suggestions */}
+				<div className="max-w-4xl w-full mx-auto px-6 pt-2 pb-8 flex flex-col items-center gap-4">
 					<div className="w-full max-w-3xl rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 text-left">
 						<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 							<label
@@ -447,7 +493,7 @@ export default function HomePage() {
 				</div>
 
 				{/* Results / Feature Grid Section */}
-				<div className="flex flex-col gap-6">
+				<div className="max-w-6xl w-full mx-auto px-6 pb-12 flex flex-col gap-6">
 					{hasSearched && (
 						<div className="flex items-center justify-between border-b border-neutral-800/60 pb-3">
 							<div className="flex items-center gap-3">

@@ -88,6 +88,17 @@ VIENEU_API_KEY=x
 
 > `VIENEU_API_KEY` mặc định là `x` vì VieNeu local không yêu cầu auth. Nếu deploy VieNeu ra ngoài và bật auth, set key thật vào đây.
 
+### Cache giọng đọc
+
+Audio hợp lệ được lưu trong `apps/web/.local_storage/speech/vieneu/`. Những lần
+chạy lại dùng cùng nội dung, giọng, tốc độ, endpoint và model sẽ dùng lại audio,
+không gọi VieNeu. Cache dùng nội dung sau chuẩn hoá phát âm và giọng đã resolve,
+nên các alias của cùng một giọng dùng chung cache. File được kiểm tra bằng ffprobe
+trước khi dùng lại; audio hỏng được tạo lại và lỗi tạo giọng không được lưu cache.
+
+Đổi nội dung/giọng/tốc độ/model sẽ tạo cache mới. Nếu thay weights hoặc voice preset
+trên server nhưng giữ nguyên tên model và endpoint, xoá thư mục cache để tạo lại.
+
 ## Chạy test
 
 ### Test VieNeu provider

@@ -7,9 +7,33 @@ import { SpeechProviderError } from "@/providers/tts/types";
 
 const activeJobs = new Map<string, Promise<LocalizedVideoProject>>();
 
+export async function GET(request: NextRequest) {
+	try {
+		const { searchParams } = new URL(request.url);
+		const projectId = searchParams.get("projectId");
+		if (!projectId || !/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+			return NextResponse.json({ success: false, error: "Mã dự án không hợp lệ." }, { status: 400 });
+		}
+		const workDir = path.join(process.cwd(), ".local_storage", "projects");
+		const latestFile = path.join(workDir, projectId, "latest-project.json");
+		const fsModule = await import("fs");
+		if (!fsModule.existsSync(latestFile)) {
+			return NextResponse.json({ success: false, notFound: true }, { status: 404 });
+		}
+		const content = fsModule.readFileSync(latestFile, "utf-8");
+		const cached = JSON.parse(content);
+		return NextResponse.json({ success: true, localizedProject: cached });
+	} catch (error: unknown) {
+		return NextResponse.json(
+			{ success: false, error: error instanceof Error ? error.message : "Failed to load cached project" },
+			{ status: 500 },
+		);
+	}
+}
+
 export async function POST(request: NextRequest) {
 	try {
-		const { projectId, videoPath, voice, subtitles } = await request.json();
+		const { projectId, videoPath, voice, subtitles, force } = await request.json();
 		if (typeof projectId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(projectId)) {
 			return NextResponse.json({ success: false, error: "Mã dự án không hợp lệ." }, { status: 400 });
 		}
@@ -26,6 +50,26 @@ export async function POST(request: NextRequest) {
 		}
 
 		const workDir = path.join(process.cwd(), ".local_storage", "projects");
+		const latestFile = path.join(workDir, projectId, "latest-project.json");
+
+		// If no custom subtitles and not forced, return cached result if audio files exist
+		if (!subtitles && !force && fsModule.existsSync(latestFile)) {
+			try {
+				const cached = JSON.parse(fsModule.readFileSync(latestFile, "utf-8"));
+				const bgParam = cached.backgroundAudioUrl ? new URL(cached.backgroundAudioUrl, "http://localhost").searchParams.get("file") : null;
+				const voiceParam = cached.voiceovers?.[0]?.audioUrl ? new URL(cached.voiceovers[0].audioUrl, "http://localhost").searchParams.get("file") : null;
+				if ((!bgParam || fsModule.existsSync(bgParam)) && (!voiceParam || fsModule.existsSync(voiceParam))) {
+					return NextResponse.json({
+						success: true,
+						localizedProject: cached,
+						cached: true,
+					});
+				}
+			} catch (err) {
+				console.warn("Failed reading latest-project.json, continuing fresh run:", err);
+			}
+		}
+
 		const pipeline = new LocalizationPipeline();
 
 		const jobKey = JSON.stringify([projectId, targetVideoPath, voice, subtitles]);

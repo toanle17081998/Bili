@@ -217,6 +217,33 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	const [previewCues, setPreviewCues] = useState<PreviewCue[]>([]);
 	const [isPreviewing, setIsPreviewing] = useState(false);
 	const [hasPreviewed, setHasPreviewed] = useState(false);
+	const [existingLocalized, setExistingLocalized] = useState<any>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		const checkExisting = async () => {
+			try {
+				const res = await fetch(
+					`/api/localization/process?projectId=${encodeURIComponent(projectId)}`,
+				);
+				if (!res.ok) return;
+				const data = await res.json();
+				if (!cancelled && data.success && data.localizedProject) {
+					setExistingLocalized(data.localizedProject);
+					if (data.localizedProject.subtitles?.length) {
+						setPreviewCues(data.localizedProject.subtitles);
+						setHasPreviewed(true);
+					}
+				}
+			} catch {
+				// Silently ignore
+			}
+		};
+		checkExisting();
+		return () => {
+			cancelled = true;
+		};
+	}, [projectId]);
 
 	const updateSubtitleBackground = (
 		patch: Partial<typeof subtitleBackground>,
@@ -441,7 +468,251 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		});
 	};
 
-	const handleLocalize = async () => {
+	const applyLocalizationToTimeline = async (
+		localized: any,
+		toastId?: string | number,
+	) => {
+		if (!localized.backgroundAudioUrl) {
+			throw new Error("Chưa tách được giọng gốc. Vui lòng thử lại trước khi gắn lồng tiếng.");
+		}
+
+		// Update preview cues from result if not already previewed
+		if (!hasPreviewed && localized.subtitles) {
+			setPreviewCues(localized.subtitles);
+			setHasPreviewed(true);
+		}
+
+		setProgressStep("Đang tải file âm thanh (nhạc nền & giọng đọc AI)...");
+		const prepared = [];
+		const segments = [
+			...(localized.backgroundAudioUrl
+				? [
+						{
+							id: "ai-background",
+							start: 0,
+							audioUrl: localized.backgroundAudioUrl,
+							duration: localized.source.duration,
+						},
+					]
+				: []),
+			...(localized.voiceovers ?? []),
+		];
+
+		for (const segment of segments) {
+			setProgressStep(
+				segment.id === "ai-background"
+					? "Đang tải và chuẩn bị file nhạc nền tách tiếng..."
+					: "Đang tải track giọng đọc lồng tiếng AI...",
+			);
+			const audio = await fetch(segment.audioUrl);
+			if (!audio.ok) throw new Error("Không thể nạp giọng đọc đã tạo.");
+			const file = new File([await audio.blob()], `${segment.id}.wav`, {
+				type: "audio/wav",
+			});
+			const [processed] = await processMediaAssets({ files: [file] });
+			const durationSeconds = processed?.duration || segment.duration;
+			if (!durationSeconds)
+				throw new Error("Không thể đọc file giọng đọc.");
+			if (processed && !processed.duration) {
+				processed.duration = durationSeconds;
+			}
+			const asset = await editor.media.addMediaAsset({
+				projectId,
+				asset: processed,
+			});
+			if (!asset) throw new Error("Không thể lưu giọng đọc vào dự án.");
+			const element = buildElementFromMedia({
+				mediaId: asset.id,
+				mediaType: "audio",
+				name: file.name,
+				duration: mediaTimeFromSeconds({
+					seconds: Math.min(durationSeconds, segment.duration),
+				}),
+				startTime: mediaTimeFromSeconds({ seconds: segment.start }),
+			});
+			Object.assign(
+				element.params,
+				volumeControlParams(
+					segment.id === "ai-background"
+						? originalVolume[0]
+						: voiceoverVolume[0],
+				),
+			);
+			prepared.push(element);
+		}
+
+		setProgressStep("Đang dọn dẹp các track cũ và đưa âm thanh lên timeline...");
+		const scene = editor.scenes.getActiveScene();
+		const sourceMediaIds = new Set(
+			[scene.tracks.main, ...scene.tracks.overlay].flatMap((track) =>
+				track.elements
+					.filter((e) => e.type === "video")
+					.map((e) => e.mediaId),
+			),
+		);
+		const previousCaptionTrack = localStorage.getItem(
+			`ai-caption-track-${projectId}`,
+		);
+		const previousResult = sessionStorage.getItem(`localized_${projectId}`);
+		const previousTexts = new Set<string>(
+			previousResult
+				? (JSON.parse(previousResult).subtitles ?? []).map(
+						(sub: { text: string }) =>
+							sub.text.replace(/\s+/g, " ").trim(),
+					)
+				: [],
+		);
+		const legacyCaptionTracks = new Set(
+			scene.tracks.overlay
+				.filter(
+					(track) =>
+						!previousCaptionTrack &&
+						track.type === "text" &&
+						track.elements.length > 0 &&
+						track.elements.every(
+							(element) =>
+								/^Caption \d+$/.test(element.name) &&
+								previousTexts.has(
+									String(element.params.content)
+										.replace(/\s+/g, " ")
+										.trim(),
+								),
+						),
+				)
+				.map((track) => track.id),
+		);
+
+		// Clean up previous AI audio and captions
+		editor.timeline.deleteElements({
+			elements: [...scene.tracks.audio, ...scene.tracks.overlay].flatMap(
+				(track) =>
+					track.elements
+						.filter(
+							(element) =>
+								(element.type === "audio" &&
+									(element.name.startsWith("voice-") ||
+										element.name.startsWith("ai-background"))) ||
+								((track.id === previousCaptionTrack ||
+									legacyCaptionTracks.has(track.id)) &&
+									element.type === "text"),
+						)
+						.map((element) => ({
+							trackId: track.id,
+							elementId: element.id,
+						})),
+			),
+		});
+
+		// If background audio is separated, mute original video track; otherwise duck it to originalVolume
+		if (localized.backgroundAudioUrl) {
+			editor.timeline.updateElements({
+				updates: [
+					scene.tracks.main,
+					...scene.tracks.overlay,
+					...scene.tracks.audio,
+				].flatMap((track) =>
+					track.elements
+						.filter(
+							(element) =>
+								element.type === "video" ||
+								(element.type === "audio" &&
+									element.sourceType === "upload" &&
+									sourceMediaIds.has(element.mediaId)),
+						)
+						.map((element) => ({
+							trackId: track.id,
+							elementId: element.id,
+							patch: { params: { ...element.params, muted: true } },
+						})),
+				),
+			});
+		} else {
+			applyVolume("original", originalVolume[0]);
+		}
+
+		for (const element of prepared) {
+			editor.timeline.insertElement({
+				element,
+				placement: { mode: "auto", trackType: "audio" },
+			});
+		}
+		localStorage.setItem(
+			`ai-volume-units-v2-${projectId}-${scene.id}`,
+			"true",
+		);
+
+		// Convert subtitles into OpenCut cues and insert on timeline
+		if (localized.subtitles && localized.subtitles.length > 0) {
+			setProgressStep("Đang tạo và gắn phụ đề tiếng Việt vào timeline...");
+			const cues: SubtitleCue[] = localized.subtitles.map((sub: any) => ({
+				text:
+					subtitleStyle === "yellow-reference"
+						? sub.text.replace(/\n/g, " ")
+						: sub.text,
+				startTime: sub.start,
+				duration: Math.max(0.6, sub.end - sub.start),
+				style: {
+					fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
+					color:
+						subtitleStyle === "yellow-reference"
+							? "#FFFF00"
+							: "#FFFFFF",
+					...(subtitleStyle === "yellow-reference"
+						? {
+								fontSizeRatioOfPlayHeight: 0.037,
+								strokeColor: "#000000",
+								strokeWidth: 4,
+								placement: {
+									verticalAlign: "bottom" as const,
+									marginVerticalRatio: 0.025,
+								},
+							}
+						: {}),
+					background: {
+						enabled: subtitleBackground.enabled,
+						color: getEffectiveBgColor(
+							subtitleBackground.color,
+							subtitleBackground.opacity ?? 95,
+						),
+						paddingX: subtitleBackground.paddingX,
+						paddingY: subtitleBackground.paddingY,
+						cornerRadius: subtitleBackground.cornerRadius ?? 16,
+						blur: subtitleBackground.blur ?? 24,
+						fullWidth: subtitleBackground.fullWidth ?? false,
+						backdropBlur: subtitleBackground.backdropBlur ?? false,
+						stripHeight: subtitleBackground.stripHeight ?? 22,
+					},
+				},
+			}));
+			const captionTrack = insertCaptionChunksAsTextTrack({
+				editor,
+				captions: cues,
+			});
+			if (captionTrack)
+				localStorage.setItem(`ai-caption-track-${projectId}`, captionTrack);
+		}
+
+		// Save localized result for export
+		sessionStorage.setItem(
+			`localized_${projectId}`,
+			JSON.stringify(localized),
+		);
+		await editor.project.saveCurrentProject();
+
+		if (toastId) {
+			toast.success("Việt hóa thành công! Đã gắn vào timeline.", {
+				id: toastId,
+			});
+		} else {
+			toast.success("Đã gắn bản Việt hóa vào timeline!");
+		}
+
+		setProgressStep(
+			"Hoàn tất! Phụ đề & giọng đọc đã sẵn sàng trên timeline.",
+		);
+	};
+
+	const handleLocalize = async (forceRerun = false) => {
 		// Retrieve imported video info
 		const importedDataStr = sessionStorage.getItem(
 			`imported_video_${projectId}`,
@@ -453,7 +724,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		}
 
 		setIsProcessing(true);
-		setProgressStep("Đang tạo giọng đọc liền mạch và ghép một track giọng Việt...");
+		setProgressStep("Đang kết nối AI và xử lý lồng tiếng tiếng Việt...");
 		const toastId = toast.loading("Đang xử lý Việt hóa video...");
 
 		try {
@@ -464,7 +735,11 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					projectId,
 					videoPath: videoPath || "default",
 					voice,
-					subtitles: hasPreviewed && previewCues.length > 0 ? previewCues : undefined,
+					subtitles:
+						hasPreviewed && previewCues.length > 0
+							? previewCues
+							: undefined,
+					force: forceRerun,
 				}),
 			});
 
@@ -474,139 +749,8 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			}
 
 			const localized = data.localizedProject;
-			if (!localized.backgroundAudioUrl) throw new Error("Chưa tách được giọng gốc. Vui lòng thử lại trước khi gắn lồng tiếng.");
-
-			// Update preview cues from result if not already previewed
-			if (!hasPreviewed && localized.subtitles) {
-				setPreviewCues(localized.subtitles);
-				setHasPreviewed(true);
-			}
-
-			// Prepare audio assets before adding to timeline
-			const prepared = [];
-			const segments = [
-				...(localized.backgroundAudioUrl
-					? [{ id: "ai-background", start: 0, audioUrl: localized.backgroundAudioUrl, duration: localized.source.duration }]
-					: []),
-				...(localized.voiceovers ?? []),
-			];
-
-			for (const segment of segments) {
-				const audio = await fetch(segment.audioUrl);
-				if (!audio.ok) throw new Error("Không thể nạp giọng đọc đã tạo.");
-				const file = new File([await audio.blob()], `${segment.id}.wav`, {
-					type: "audio/wav",
-				});
-				const [processed] = await processMediaAssets({ files: [file] });
-				if (!processed?.duration)
-					throw new Error("Không thể đọc file giọng đọc.");
-				const asset = await editor.media.addMediaAsset({
-					projectId,
-					asset: processed,
-				});
-				if (!asset) throw new Error("Không thể lưu giọng đọc vào dự án.");
-				const element = buildElementFromMedia({
-					mediaId: asset.id,
-					mediaType: "audio",
-					name: file.name,
-					duration: mediaTimeFromSeconds({ seconds: Math.min(processed.duration, segment.duration) }),
-					startTime: mediaTimeFromSeconds({ seconds: segment.start }),
-				});
-				Object.assign(element.params, volumeControlParams(segment.id === "ai-background" ? originalVolume[0] : voiceoverVolume[0]));
-				prepared.push(element);
-			}
-
-			const scene = editor.scenes.getActiveScene();
-			const sourceMediaIds = new Set([scene.tracks.main, ...scene.tracks.overlay]
-				.flatMap((track) => track.elements.filter((e) => e.type === "video").map((e) => e.mediaId)));
-			const previousCaptionTrack = localStorage.getItem(`ai-caption-track-${projectId}`);
-			const previousResult = sessionStorage.getItem(`localized_${projectId}`);
-			const previousTexts = new Set<string>(previousResult
-				? (JSON.parse(previousResult).subtitles ?? []).map((sub: { text: string }) => sub.text.replace(/\s+/g, " ").trim())
-				: []);
-			const legacyCaptionTracks = new Set(scene.tracks.overlay.filter((track) =>
-				!previousCaptionTrack && track.type === "text" && track.elements.length > 0 &&
-				track.elements.every((element) => /^Caption \d+$/.test(element.name) &&
-					previousTexts.has(String(element.params.content).replace(/\s+/g, " ").trim()))
-			).map((track) => track.id));
-
-			// Clean up previous AI audio and captions
-			editor.timeline.deleteElements({
-				elements: [...scene.tracks.audio, ...scene.tracks.overlay].flatMap((track) =>
-					track.elements.filter((element) =>
-						(element.type === "audio" && (element.name.startsWith("voice-") || element.name.startsWith("ai-background"))) ||
-						((track.id === previousCaptionTrack || legacyCaptionTracks.has(track.id)) && element.type === "text")
-					).map((element) => ({ trackId: track.id, elementId: element.id })),
-				),
-			});
-
-			// If background audio is separated, mute original video track; otherwise duck it to originalVolume
-			if (localized.backgroundAudioUrl) {
-				editor.timeline.updateElements({
-					updates: [scene.tracks.main, ...scene.tracks.overlay, ...scene.tracks.audio].flatMap((track) =>
-						track.elements.filter((element) => element.type === "video" ||
-							(element.type === "audio" && element.sourceType === "upload" && sourceMediaIds.has(element.mediaId))).map((element) => ({
-							trackId: track.id, elementId: element.id,
-							patch: { params: { ...element.params, muted: true } },
-						})),
-					),
-				});
-			} else {
-				applyVolume("original", originalVolume[0]);
-			}
-
-			for (const element of prepared) {
-				editor.timeline.insertElement({
-					element,
-					placement: { mode: "auto", trackType: "audio" },
-				});
-			}
-			localStorage.setItem(`ai-volume-units-v2-${projectId}-${scene.id}`, "true");
-
-			toast.success("Việt hóa thành công! Đang gắn vào timeline...", {
-				id: toastId,
-			});
-
-			// Convert subtitles into OpenCut cues and insert on timeline
-			if (localized.subtitles && localized.subtitles.length > 0) {
-				const cues: SubtitleCue[] = localized.subtitles.map((sub: any) => ({
-					text: subtitleStyle === "yellow-reference" ? sub.text.replace(/\n/g, " ") : sub.text,
-					startTime: sub.start,
-					duration: Math.max(0.6, sub.end - sub.start),
-					style: {
-						fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
-						color: subtitleStyle === "yellow-reference" ? "#FFFF00" : "#FFFFFF",
-						...(subtitleStyle === "yellow-reference" ? { fontSizeRatioOfPlayHeight: 0.037, strokeColor: "#000000", strokeWidth: 4, placement: { verticalAlign: "bottom" as const, marginVerticalRatio: 0.025 } } : {}),
-						background: {
-							enabled: subtitleBackground.enabled,
-							color: getEffectiveBgColor(
-								subtitleBackground.color,
-								subtitleBackground.opacity ?? 95,
-							),
-							paddingX: subtitleBackground.paddingX,
-							paddingY: subtitleBackground.paddingY,
-							cornerRadius: subtitleBackground.cornerRadius ?? 16,
-							blur: subtitleBackground.blur ?? 24,
-							fullWidth: subtitleBackground.fullWidth ?? false,
-							backdropBlur: subtitleBackground.backdropBlur ?? false,
-							stripHeight: subtitleBackground.stripHeight ?? 22,
-						},
-					},
-				}));
-				const captionTrack = insertCaptionChunksAsTextTrack({ editor, captions: cues });
-				if (captionTrack) localStorage.setItem(`ai-caption-track-${projectId}`, captionTrack);
-			}
-
-			// Save localized result for export
-			sessionStorage.setItem(
-				`localized_${projectId}`,
-				JSON.stringify(localized),
-			);
-			await editor.project.saveCurrentProject();
-
-			setProgressStep(
-				"Hoàn tất! Phụ đề & giọng đọc đã sẵn sàng trên timeline.",
-			);
+			setExistingLocalized(localized);
+			await applyLocalizationToTimeline(localized, toastId);
 		} catch (err: any) {
 			toast.error(err.message || "Lỗi khi xử lý Việt hóa", { id: toastId });
 			setProgressStep(null);
@@ -1203,18 +1347,57 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				)}
 			</div>
 
+			{/* Existing Localized Quick Apply Banner */}
+			{existingLocalized && !isProcessing && (
+				<div className="flex flex-col gap-2 p-3 bg-emerald-950/40 rounded-lg border border-emerald-800/60 text-xs">
+					<div className="flex items-center justify-between text-emerald-400 font-semibold">
+						<span className="flex items-center gap-1.5">
+							<span>🎉</span> Bản Việt hóa đã sẵn sàng
+						</span>
+						<span className="text-[10px] bg-emerald-900/60 text-emerald-300 px-1.5 py-0.5 rounded font-mono">
+							Đã tạo xong
+						</span>
+					</div>
+					<p className="text-[11px] text-neutral-300 leading-relaxed">
+						Video này đã có nhạc nền tách tiếng và giọng đọc AI hoàn tất trên máy chủ. Bạn có thể gắn thẳng vào timeline ngay lập tức!
+					</p>
+					<Button
+						type="button"
+						size="sm"
+						disabled={isProcessing}
+						onClick={async () => {
+							setIsProcessing(true);
+							const toastId = toast.loading("Đang gắn bản Việt hóa vào timeline...");
+							try {
+								await applyLocalizationToTimeline(existingLocalized, toastId);
+							} catch (e: any) {
+								toast.error(e.message || "Lỗi khi gắn timeline", { id: toastId });
+								setProgressStep(null);
+							} finally {
+								setIsProcessing(false);
+							}
+						}}
+						className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs h-8 shadow"
+					>
+						⚡ Gắn vào Timeline ngay
+					</Button>
+				</div>
+			)}
+
 			{/* Primary Action Button */}
 			<Button
 				disabled={isProcessing || isPreviewing}
-				onClick={handleLocalize}
+				onClick={() => handleLocalize(Boolean(existingLocalized))}
 				className="w-full bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white font-medium text-xs py-5 shadow-lg shadow-rose-900/20"
 			>
 				<HugeiconsIcon icon={SparklesIcon} className="size-4 mr-2" />
 				{isProcessing
 					? "Đang xử lý..."
-					: hasPreviewed
-						? "✨ Bắt đầu Việt hóa & Gắn timeline"
-						: "✨ Việt hóa video"}
+					: existingLocalized
+						? "🔄 Tạo lại bản Việt hóa mới"
+						: hasPreviewed
+							? "✨ Bắt đầu Việt hóa & Gắn timeline"
+							: "✨ Việt hóa video"}
 			</Button>
 
 			{/* Status or Progress */}
