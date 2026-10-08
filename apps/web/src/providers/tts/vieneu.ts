@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { FFmpegService } from "@/media/ffmpeg";
+import { prepareSpeechText } from "@/localization/timing";
 import {
 	SpeechProviderError,
 	type TTSProvider,
@@ -93,7 +94,7 @@ export class VieNeuTTSProvider implements TTSProvider {
 		const body = JSON.stringify({
 			model: this.model,
 			voice,
-			input: text,
+			input: await prepareSpeechText(text),
 			response_format: "wav",
 			speed,
 		});

@@ -10,4 +10,8 @@ export interface TextBackground {
 	offsetX?: number;
 	offsetY?: number;
 	blur?: number;
+	fullWidth?: boolean;
+	backdropBlur?: boolean;
+	/** Bottom strip height as a percentage of the video canvas. */
+	stripHeight?: number;
 }

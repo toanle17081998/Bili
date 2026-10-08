@@ -58,6 +58,8 @@ const SUBTITLE_BG_PRESETS = [
 			cornerRadius: 16,
 			paddingX: 240,
 			paddingY: 90,
+			fullWidth: false,
+			stripHeight: 22,
 		},
 	},
 	{
@@ -72,6 +74,8 @@ const SUBTITLE_BG_PRESETS = [
 			cornerRadius: 4,
 			paddingX: 600,
 			paddingY: 100,
+			fullWidth: true,
+			stripHeight: 22,
 		},
 	},
 	{
@@ -86,6 +90,8 @@ const SUBTITLE_BG_PRESETS = [
 			cornerRadius: 20,
 			paddingX: 120,
 			paddingY: 70,
+			fullWidth: false,
+			stripHeight: 22,
 		},
 	},
 ] as const;
@@ -188,6 +194,9 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			cornerRadius: 16,
 			paddingX: 240,
 			paddingY: 90,
+			fullWidth: false,
+			backdropBlur: false,
+			stripHeight: 22,
 		},
 	});
 
@@ -248,12 +257,26 @@ export function VietnameseAiPanel({ projectId }: Props) {
 										"background.cornerRadius":
 											background.cornerRadius ?? 16,
 										"background.blur": background.blur ?? 24,
+										"background.fullWidth": background.fullWidth ?? false,
+										"background.backdropBlur": background.backdropBlur ?? false,
+										"background.stripHeight": background.stripHeight ?? 22,
 									},
 								},
 							}))
 					: [],
 			),
 		});
+		void editor.project.saveCurrentProject();
+	};
+
+	const selectSubtitleStyle = (value: string) => {
+		setSubtitleStyle(value);
+		if (value !== "yellow-reference") return;
+		updateSubtitleBackground({ enabled: true, fullWidth: true, backdropBlur: true, stripHeight: 10, color: "#000000", opacity: 0, blur: 30, cornerRadius: 0, paddingX: 0, paddingY: 0 });
+		const scene = editor.scenes.getActiveSceneOrNull();
+		if (!scene) return;
+		const savedTrack = localStorage.getItem(`ai-caption-track-${projectId}`);
+		editor.timeline.updateElements({ updates: [scene.tracks.main, ...scene.tracks.overlay].flatMap((track) => track.type === "text" ? track.elements.filter((element) => track.id === savedTrack || element.name.toLowerCase().startsWith("caption")).map((element) => ({ trackId: track.id, elementId: element.id, patch: { params: { ...element.params, content: typeof element.params.content === "string" ? element.params.content.replace(/\n/g, " ") : element.params.content, color: "#FFFF00", fontFamily: "Arial", fontWeight: "normal", fontSize: 3.33, textAlign: "center", "stroke.color": "#000000", "stroke.width": 4, "transform.positionX": 0, "transform.positionY": canvasSize.height * 0.44 } } })) : []) });
 		void editor.project.saveCurrentProject();
 	};
 
@@ -547,12 +570,13 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			// Convert subtitles into OpenCut cues and insert on timeline
 			if (localized.subtitles && localized.subtitles.length > 0) {
 				const cues: SubtitleCue[] = localized.subtitles.map((sub: any) => ({
-					text: sub.text,
+					text: subtitleStyle === "yellow-reference" ? sub.text.replace(/\n/g, " ") : sub.text,
 					startTime: sub.start,
 					duration: Math.max(0.6, sub.end - sub.start),
 					style: {
 						fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
-						color: "#FFFFFF",
+						color: subtitleStyle === "yellow-reference" ? "#FFFF00" : "#FFFFFF",
+						...(subtitleStyle === "yellow-reference" ? { fontSizeRatioOfPlayHeight: 0.037, strokeColor: "#000000", strokeWidth: 4, placement: { verticalAlign: "bottom" as const, marginVerticalRatio: 0.025 } } : {}),
 						background: {
 							enabled: subtitleBackground.enabled,
 							color: getEffectiveBgColor(
@@ -563,6 +587,9 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							paddingY: subtitleBackground.paddingY,
 							cornerRadius: subtitleBackground.cornerRadius ?? 16,
 							blur: subtitleBackground.blur ?? 24,
+							fullWidth: subtitleBackground.fullWidth ?? false,
+							backdropBlur: subtitleBackground.backdropBlur ?? false,
+							stripHeight: subtitleBackground.stripHeight ?? 22,
 						},
 					},
 				}));
@@ -783,16 +810,18 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				{/* Subtitle Style */}
 				<div className="flex flex-col gap-1.5">
 					<Label className="text-xs text-neutral-400">Phong cách phụ đề</Label>
-					<Select value={subtitleStyle} onValueChange={setSubtitleStyle}>
+					<Select value={subtitleStyle} onValueChange={selectSubtitleStyle}>
 						<SelectTrigger className="bg-neutral-950 border-neutral-800 text-xs">
 							<SelectValue placeholder="Kiểu phụ đề" />
 						</SelectTrigger>
 						<SelectContent className="bg-neutral-900 border-neutral-800 text-xs">
 							<SelectItem value="bold">In đậm (Bold TikTok)</SelectItem>
 							<SelectItem value="minimal">Tối giản (Minimal)</SelectItem>
+							<SelectItem value="yellow-reference">Chữ vàng viền đen (theo ảnh mẫu)</SelectItem>
 						</SelectContent>
 					</Select>
 					<div className="mt-2 flex items-center justify-between">
+						<Button type="button" variant="outline" size="sm" disabled={isProcessing} onClick={() => selectSubtitleStyle("yellow-reference")}>Áp dụng mẫu chữ vàng + nền video mờ</Button>
 						<div className="flex items-center gap-2">
 							<Checkbox
 								id="subtitle-background"
@@ -813,6 +842,19 @@ export function VietnameseAiPanel({ projectId }: Props) {
 
 					{subtitleBackground.enabled && (
 						<div className="flex flex-col gap-3.5 rounded-lg border border-neutral-700 bg-neutral-950/60 p-3">
+							<div className="flex items-center gap-2">
+								<Checkbox id="subtitle-full-width" checked={subtitleBackground.fullWidth ?? false} disabled={isProcessing} onCheckedChange={(checked) => updateSubtitleBackground({ fullWidth: checked === true })} />
+								<Label htmlFor="subtitle-full-width" className="cursor-pointer text-xs">Phủ ngang toàn bộ đáy video</Label>
+							</div>
+							{subtitleBackground.fullWidth && <div className="flex flex-col gap-1">
+								<div className="flex items-center gap-2">
+									<Checkbox id="subtitle-backdrop-blur" checked={subtitleBackground.backdropBlur ?? false} disabled={isProcessing} onCheckedChange={(checked) => updateSubtitleBackground({ backdropBlur: checked === true })} />
+									<Label htmlFor="subtitle-backdrop-blur" className="text-xs">Làm mờ hình video phía sau chữ</Label>
+								</div>
+								<Label htmlFor="subtitle-strip-height" className="text-xs">Chiều cao dải nền: {subtitleBackground.stripHeight ?? 22}%</Label>
+								<input id="subtitle-strip-height" type="range" min={5} max={50} step={1} value={subtitleBackground.stripHeight ?? 22} disabled={isProcessing} onChange={(event) => updateSubtitleBackground({ stripHeight: Number(event.target.value) })} className="w-full accent-rose-500" />
+								<p className="text-[10px] text-neutral-400">Bật làm mờ hình và giảm độ che phủ về 0% để giữ màu video như mẫu.</p>
+							</div>}
 							{/* Quick Presets */}
 							<div className="flex flex-col gap-1.5">
 								<span className="text-[11px] font-semibold text-neutral-300">
@@ -877,7 +919,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 									className="w-full accent-rose-500"
 									id="subtitle-opacity"
 									aria-label="Độ che phủ"
-									min={40}
+									min={0}
 									max={100}
 									step={1}
 									disabled={isProcessing}

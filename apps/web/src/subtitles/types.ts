@@ -30,6 +30,8 @@ export interface SubtitleStyleOverrides {
 	fontSizeRatioOfPlayHeight?: number;
 	fontFamily?: string;
 	color?: string;
+	strokeColor?: string;
+	strokeWidth?: number;
 	background?: Pick<TextBackground, "enabled" | "color"> &
 		Partial<Omit<TextBackground, "enabled" | "color">>;
 	textAlign?: TextAlign;

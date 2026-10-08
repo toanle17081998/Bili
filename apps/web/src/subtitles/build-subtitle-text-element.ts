@@ -323,6 +323,8 @@ export function buildSubtitleTextElement({
 			fontSize: style.fontSize,
 			fontFamily: style.fontFamily,
 			color: style.color,
+			"stroke.color": caption.style?.strokeColor ?? "#000000",
+			"stroke.width": caption.style?.strokeWidth ?? 0,
 			textAlign: style.textAlign,
 			fontWeight: style.fontWeight,
 			fontStyle: style.fontStyle,
@@ -342,6 +344,9 @@ export function buildSubtitleTextElement({
 			"background.offsetY":
 				style.background.offsetY ?? DEFAULTS.text.background.offsetY,
 			"background.blur": style.background.blur ?? 0,
+			"background.fullWidth": style.background.fullWidth ?? false,
+			"background.backdropBlur": style.background.backdropBlur ?? false,
+			"background.stripHeight": style.background.stripHeight ?? 22,
 			"transform.positionX": positionX,
 			"transform.positionY": positionY,
 		},

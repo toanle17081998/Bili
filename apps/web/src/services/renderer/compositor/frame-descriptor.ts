@@ -26,6 +26,7 @@ import type {
 	TextureUploadDescriptor,
 } from "./types";
 import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics";
+import { buildGaussianBlurPasses } from "@/effects/definitions/blur";
 
 export async function buildFrameDescriptor({
 	node,
@@ -295,6 +296,60 @@ function collectTextNode({
 
 	const textureId = `${path}:text`;
 	const { width, height } = renderer;
+	const background = node.resolved.measuredText.resolvedBackground;
+	if (
+		background.enabled &&
+		background.fullWidth &&
+		background.backdropBlur &&
+		(background.blur ?? 0) > 0
+	) {
+		// Reuse the visible video/image frame, blur it, and reveal only the strip
+		// behind the caption. This keeps source colors rather than painting a box.
+		const sourceLayer = [...items]
+			.reverse()
+			.find(
+				(item) =>
+					item.type === "layer" &&
+					textures.get(item.textureId)?.kind === "external",
+			);
+		if (sourceLayer?.type === "layer" && !sourceLayer.mask) {
+			const texture = textures.get(sourceLayer.textureId)!;
+			const stripTop =
+				height *
+				(1 - Math.max(5, Math.min(50, background.stripHeight ?? 22)) / 100);
+			const visualTop =
+				sourceLayer.transform.centerY - sourceLayer.transform.height / 2;
+			const top = Math.max(
+				0,
+				Math.min(
+					texture.height,
+					((stripTop - visualTop) / sourceLayer.transform.height) *
+						texture.height,
+				),
+			);
+			const maskId = `${path}:subtitle-backdrop-mask`;
+			textures.set(maskId, {
+				kind: "rendered",
+				id: maskId,
+				contentHash: `${texture.width}:${texture.height}:${top}`,
+				width: texture.width,
+				height: texture.height,
+				draw: (ctx) => {
+					ctx.fillStyle = "white";
+					ctx.fillRect(0, top, texture.width, texture.height - top);
+				},
+			});
+			const sigma = ((background.blur ?? 24) * texture.height) / 1080;
+			items.push({
+				...sourceLayer,
+				effectPassGroups: [
+					...sourceLayer.effectPassGroups,
+					buildGaussianBlurPasses({ sigmaX: sigma, sigmaY: sigma }),
+				],
+				mask: { textureId: maskId, feather: sigma, inverted: false },
+			});
+		}
+	}
 	// Text output is fully determined by node.params + node.resolved. Both are
 	// plain data we can stringify cheaply; the resolved measured layout is the
 	// expensive part of text setup, so stringifying it here is orders of

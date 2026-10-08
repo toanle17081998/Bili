@@ -100,6 +100,11 @@ export class BilibiliProvider implements VideoSourceProvider {
 				const proc = spawn(this.ytdlpPath, [
 					"-j",
 					"--skip-download",
+					"--force-ipv4",
+					"--socket-timeout",
+					"15",
+					"--retries",
+					"3",
 					`https://www.bilibili.com/video/${id}`,
 				]);
 				let stdout = "";
@@ -171,6 +176,19 @@ export class BilibiliProvider implements VideoSourceProvider {
 			await new Promise<void>((resolve, reject) => {
 				const proc = spawn(this.ytdlpPath, [
 					...(this.ffmpegDir ? ["--ffmpeg-location", this.ffmpegDir] : []),
+					// Keep CDN connections short and resume partial downloads after disconnects.
+					"--force-ipv4",
+					"--http-chunk-size",
+					"1M",
+					"--socket-timeout",
+					"15",
+					"--retries",
+					"20",
+					"--retry-sleep",
+					"http:exp=1:8",
+					"--continue",
+					"--no-playlist",
+					"--no-progress",
 					// Prefer H.264 because HEVC cannot be decoded by all supported browsers.
 					"-f",
 					"bv*[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]/best[vcodec^=avc]",
@@ -187,7 +205,7 @@ export class BilibiliProvider implements VideoSourceProvider {
 					else
 						reject(
 							new Error(
-								`yt-dlp tải video thất bại (code ${code}): ${stderr.slice(0, 200)}`,
+								`yt-dlp tải video thất bại (code ${code}): ${stderr.slice(-1500)}`,
 							),
 						);
 				});

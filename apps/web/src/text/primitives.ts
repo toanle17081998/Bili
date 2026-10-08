@@ -54,7 +54,11 @@ export interface ResolvedTextBackgroundLike {
 	blur?: number;
 }
 
-export function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
+export function quoteFontFamily({
+	fontFamily,
+}: {
+	fontFamily: string;
+}): string {
 	return `"${fontFamily.replace(/"/g, '\\"')}"`;
 }
 
@@ -146,6 +150,8 @@ export function drawMeasuredTextLayout({
 	background,
 	backgroundColor,
 	textBaseline = "middle",
+	strokeColor = "#000000",
+	strokeWidth = 0,
 }: {
 	ctx: TextCanvasContext;
 	layout: MeasuredTextLayout;
@@ -153,6 +159,8 @@ export function drawMeasuredTextLayout({
 	background?: ResolvedTextBackgroundLike | null;
 	backgroundColor?: string;
 	textBaseline?: CanvasTextBaseline;
+	strokeColor?: string;
+	strokeWidth?: number;
 }): void {
 	ctx.font = layout.fontString;
 	ctx.textAlign = layout.textAlign;
@@ -238,6 +246,14 @@ export function drawMeasuredTextLayout({
 
 	for (let index = 0; index < layout.lines.length; index++) {
 		const lineY = index * layout.lineHeightPx - layout.block.visualCenterOffset;
+		if (strokeWidth > 0) {
+			ctx.save();
+			ctx.strokeStyle = strokeColor;
+			ctx.lineWidth = strokeWidth;
+			ctx.lineJoin = "round";
+			ctx.strokeText(layout.lines[index], 0, lineY);
+			ctx.restore();
+		}
 		ctx.fillText(layout.lines[index], 0, lineY);
 		drawTextDecoration({
 			ctx,

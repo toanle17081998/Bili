@@ -7,6 +7,18 @@ import { z } from "zod";
 import { OpenAILLMProvider, GeminiLLMProvider } from "./index";
 import { TranslationCooldownError } from "./free-translate";
 import type { TranscriptSegment } from "@/localization/schemas";
+import { translationPrompt } from "./batched-translation";
+
+test("the shipped Rust prompt requests playful adaptation while preserving facts and dubbing constraints", async () => {
+	const source = { start: 0, end: 3, text: "齿轮卡住了" };
+	const prompt = await translationPrompt({ inputs: [{ id: 7, source }], context: ["Testing a machine"] });
+	for (const instruction of ["trẻ trung, hơi bựa", "không dịch từng chữ", "thiếu ngữ cảnh", "không bịa sự việc", "số liệu", "không thêm câu đùa làm tràn thời lượng", "Không gộp, bỏ hay tách đoạn"]) {
+		assert.ok(prompt.includes(instruction), instruction);
+	}
+	const payload = JSON.parse(prompt.slice(prompt.indexOf('{"context":')));
+	assert.deepEqual(payload.context, ["Testing a machine"]);
+	assert.deepEqual(payload.segments, [{ id: 7, text: source.text, targetDuration: 3 }]);
+});
 
 const InputSchema = z.object({ id: z.number(), text: z.string(), targetDuration: z.number() });
 const transcript = (count: number): TranscriptSegment[] => Array.from({ length: count }, (_, index) => ({

@@ -3,9 +3,7 @@ import { DEFAULTS } from "@/timeline/defaults";
 import type { TextElement } from "@/timeline";
 import type { TextBackground } from "@/text/background";
 import { resolveNumberAtTime } from "@/animation/values";
-import {
-	getTextVisualRect,
-} from "./layout";
+import { getTextVisualRect } from "./layout";
 import {
 	measureTextLayout,
 	type MeasuredTextLayout,
@@ -226,6 +224,13 @@ export function buildTextBackgroundFromElement({
 			params: element.params,
 			key: "background.blur",
 			fallback: 0,
+		}),
+		fullWidth: element.params["background.fullWidth"] === true,
+		backdropBlur: element.params["background.backdropBlur"] === true,
+		stripHeight: readNumberParam({
+			params: element.params,
+			key: "background.stripHeight",
+			fallback: 22,
 		}),
 	};
 }

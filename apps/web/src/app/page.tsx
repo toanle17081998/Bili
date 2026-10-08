@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
+import { filterSearchResults } from "@/source/search-filter";
 import type { SearchResult } from "@/source/types";
 
 const SUGGESTION_TAGS = [
@@ -37,6 +38,12 @@ const SUGGESTION_TAGS = [
 export default function HomePage() {
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
+	const [channelQuery, setChannelQuery] = useState("");
+	const [minMinutes, setMinMinutes] = useState("");
+	const [maxMinutes, setMaxMinutes] = useState("");
+	const [visibleResults, setVisibleResults] = useState<SearchResult[]>([]);
+	const [filterError, setFilterError] = useState("");
+	const [isFiltering, setIsFiltering] = useState(false);
 	const [isSearching, setIsSearching] = useState(false);
 	const [isLoadingMore, setIsLoadingMore] = useState(false);
 	const [hasSearched, setHasSearched] = useState(false);
@@ -53,13 +60,40 @@ export default function HomePage() {
 	const requestRef = useRef<AbortController | null>(null);
 	const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-	const handleSearch = async (
-		e?: React.FormEvent,
-		customQuery?: string,
-	) => {
+	useEffect(() => {
+		let cancelled = false;
+		Promise.resolve()
+			.then(() => {
+				if (cancelled) return [];
+				setIsFiltering(true);
+				setFilterError("");
+				setVisibleResults([]);
+				return filterSearchResults({
+					results,
+					minimum: minMinutes,
+					maximum: maxMinutes,
+					channel: channelQuery,
+				});
+			})
+			.then((videos) => {
+				if (!cancelled) setVisibleResults(videos);
+			})
+			.catch(() => {
+				if (!cancelled)
+					setFilterError("Không tải được bộ lọc. Vui lòng tải lại trang.");
+			})
+			.finally(() => {
+				if (!cancelled) setIsFiltering(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [results, minMinutes, maxMinutes, channelQuery]);
+
+	const handleSearch = async (e?: React.FormEvent, customQuery?: string) => {
 		if (e) e.preventDefault();
 		const query = (
-			customQuery !== undefined ? customQuery : searchQuery
+			customQuery !== undefined ? customQuery : searchQuery || channelQuery
 		).trim();
 		if (!query) {
 			toast.info("Vui lòng nhập từ khóa tìm kiếm hoặc mã BV");
@@ -113,12 +147,7 @@ export default function HomePage() {
 	};
 
 	const loadMore = useCallback(async () => {
-		if (
-			isSearching ||
-			isLoadingMore ||
-			page >= totalPages ||
-			!activeQuery
-		) {
+		if (isSearching || isLoadingMore || page >= totalPages || !activeQuery) {
 			return;
 		}
 
@@ -180,7 +209,15 @@ export default function HomePage() {
 		return () => {
 			observer.disconnect();
 		};
-	}, [loadMore, isSearching, isLoadingMore, loadMoreError, page, totalPages, activeQuery]);
+	}, [
+		loadMore,
+		isSearching,
+		isLoadingMore,
+		loadMoreError,
+		page,
+		totalPages,
+		activeQuery,
+	]);
 
 	const handleImportAndCreateProject = async (video: SearchResult) => {
 		setIsImporting(true);
@@ -253,7 +290,10 @@ export default function HomePage() {
 				<div className="text-center max-w-4xl mx-auto flex flex-col items-center gap-4">
 					{/* Badge */}
 					<div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium shadow-sm backdrop-blur-sm">
-						<HugeiconsIcon icon={SparklesIcon} className="size-3.5 animate-pulse" />
+						<HugeiconsIcon
+							icon={SparklesIcon}
+							className="size-3.5 animate-pulse"
+						/>
 						Công nghệ AI chuyển ngữ & lồng tiếng video Bilibili
 					</div>
 
@@ -267,7 +307,9 @@ export default function HomePage() {
 
 					{/* Subtitle */}
 					<p className="text-sm sm:text-base text-neutral-400 max-w-2xl leading-relaxed">
-						Dán link, mã BV hoặc nhập từ khóa để tự động dịch thuật ngữ cảnh, lồng tiếng AI tiếng Việt truyền cảm và xuất video dọc TikTok / Reels chỉ trong vài phút.
+						Dán link, mã BV hoặc nhập từ khóa để tự động dịch thuật ngữ cảnh,
+						lồng tiếng AI tiếng Việt truyền cảm và xuất video dọc TikTok / Reels
+						chỉ trong vài phút.
 					</p>
 
 					{/* Search Form - Wide, modern & roomy */}
@@ -294,6 +336,90 @@ export default function HomePage() {
 							{isSearching ? "Đang tìm..." : "Tìm kiếm"}
 						</Button>
 					</form>
+
+					<div className="w-full max-w-3xl rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 text-left">
+						<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+							<label
+								htmlFor="filter-min"
+								className="space-y-2 text-xs text-neutral-400"
+							>
+								<span>Từ (phút)</span>
+								<Input
+									id="filter-min"
+									type="number"
+									min="0"
+									step="0.5"
+									value={minMinutes}
+									onChange={(e) => setMinMinutes(e.target.value)}
+									placeholder="Không giới hạn"
+									className="bg-neutral-950 border-neutral-700 text-neutral-100"
+								/>
+							</label>
+							<label
+								htmlFor="filter-max"
+								className="space-y-2 text-xs text-neutral-400"
+							>
+								<span>Đến (phút)</span>
+								<Input
+									id="filter-max"
+									type="number"
+									min="0"
+									step="0.5"
+									value={maxMinutes}
+									onChange={(e) => setMaxMinutes(e.target.value)}
+									placeholder="Không giới hạn"
+									className="bg-neutral-950 border-neutral-700 text-neutral-100"
+								/>
+							</label>
+							<label
+								htmlFor="filter-channel"
+								className="space-y-2 text-xs text-neutral-400"
+							>
+								<span>Tìm kiếm theo kênh</span>
+								<Input
+									id="filter-channel"
+									value={channelQuery}
+									onChange={(e) => setChannelQuery(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") void handleSearch();
+									}}
+									placeholder="Tên người đăng / kênh"
+									className="bg-neutral-950 border-neutral-700 text-neutral-100"
+								/>
+							</label>
+						</div>
+						<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
+							<span>
+								Lọc các video đã tải. Nhập tên kênh rồi bấm Tìm kiếm để tìm
+								thêm.
+							</span>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onClick={() => {
+									setMinMinutes("");
+									setMaxMinutes("");
+									setChannelQuery("");
+								}}
+								className="text-neutral-300"
+							>
+								Xóa bộ lọc
+							</Button>
+						</div>
+						{minMinutes !== "" &&
+							maxMinutes !== "" &&
+							Number(minMinutes) > Number(maxMinutes) && (
+								<p role="alert" className="mt-2 text-xs text-rose-400">
+									Thời lượng “Đến” phải lớn hơn hoặc bằng “Từ”.
+								</p>
+							)}
+						{filterError && (
+							<p role="alert" className="mt-2 text-xs text-rose-400">
+								{filterError}
+							</p>
+						)}
+					</div>
 
 					{/* Suggestion Chips & 1-Click Sample */}
 					<div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-xs text-neutral-400">
@@ -336,13 +462,13 @@ export default function HomePage() {
 							</div>
 							<span className="text-xs text-neutral-500">
 								{total > 0
-									? `${results.length} / ${total} video`
-									: `${results.length} video`}
+									? `${visibleResults.length} phù hợp / ${results.length} đã tải / ${total} video`
+									: `${visibleResults.length} video`}
 							</span>
 						</div>
 					)}
 
-					{isSearching ? (
+					{isSearching || isFiltering ? (
 						<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
 							{[1, 2, 3, 4, 5, 6].map((n) => (
 								<div
@@ -371,12 +497,16 @@ export default function HomePage() {
 											Chọn Video Bilibili
 										</h4>
 										<p className="text-xs text-neutral-400 leading-relaxed">
-											Dán link, mã BV hoặc tìm kiếm bất kỳ clip ẩm thực, mukbang, vlog hay công nghệ yêu thích từ Bilibili.
+											Dán link, mã BV hoặc tìm kiếm bất kỳ clip ẩm thực,
+											mukbang, vlog hay công nghệ yêu thích từ Bilibili.
 										</p>
 									</div>
 									<div className="mt-auto pt-2 flex items-center text-xs text-rose-400 font-medium gap-1">
 										<span>Xem trước & tải HD</span>
-										<HugeiconsIcon icon={ArrowRight01Icon} className="size-3.5" />
+										<HugeiconsIcon
+											icon={ArrowRight01Icon}
+											className="size-3.5"
+										/>
 									</div>
 								</div>
 
@@ -390,12 +520,17 @@ export default function HomePage() {
 											AI Việt Hóa Tự Động
 										</h4>
 										<p className="text-xs text-neutral-400 leading-relaxed">
-											AI tự động nhận diện giọng nói, biên kịch bản dịch tự nhiên chuẩn tiếng Việt và lồng giọng thuyết minh truyền cảm.
+											AI tự động nhận diện giọng nói, biên kịch bản dịch tự
+											nhiên chuẩn tiếng Việt và lồng giọng thuyết minh truyền
+											cảm.
 										</p>
 									</div>
 									<div className="mt-auto pt-2 flex items-center text-xs text-indigo-400 font-medium gap-1">
 										<span>Lồng tiếng Hoài My / Nam Minh</span>
-										<HugeiconsIcon icon={ArrowRight01Icon} className="size-3.5" />
+										<HugeiconsIcon
+											icon={ArrowRight01Icon}
+											className="size-3.5"
+										/>
 									</div>
 								</div>
 
@@ -409,24 +544,29 @@ export default function HomePage() {
 											Xuất Video Dọc 9:16
 										</h4>
 										<p className="text-xs text-neutral-400 leading-relaxed">
-											Tự động crop chuẩn tỷ lệ TikTok, chèn phụ đề viền đậm bắt mắt và hòa trộn âm thanh gốc tạo clip hoàn hảo.
+											Tự động crop chuẩn tỷ lệ TikTok, chèn phụ đề viền đậm bắt
+											mắt và hòa trộn âm thanh gốc tạo clip hoàn hảo.
 										</p>
 									</div>
 									<div className="mt-auto pt-2 flex items-center text-xs text-emerald-400 font-medium gap-1">
 										<span>Sẵn sàng đăng TikTok / Shorts</span>
-										<HugeiconsIcon icon={ArrowRight01Icon} className="size-3.5" />
+										<HugeiconsIcon
+											icon={ArrowRight01Icon}
+											className="size-3.5"
+										/>
 									</div>
 								</div>
 							</div>
 						</div>
-					) : results.length === 0 ? (
+					) : visibleResults.length === 0 ? (
 						/* Empty State */
 						<div className="p-12 text-center text-neutral-400 border border-dashed border-neutral-800 rounded-2xl bg-neutral-900/30 flex flex-col items-center gap-3">
 							<p className="text-base font-medium text-neutral-300">
 								Không tìm thấy video nào phù hợp
 							</p>
 							<p className="text-xs text-neutral-500 max-w-sm">
-								Hãy thử nhập từ khóa khác, hoặc dán trực tiếp mã BV của video Bilibili (ví dụ: BV18RHZ6TEeC).
+								Hãy thử nhập từ khóa khác, hoặc dán trực tiếp mã BV của video
+								Bilibili (ví dụ: BV18RHZ6TEeC).
 							</p>
 							<Button
 								variant="outline"
@@ -440,7 +580,7 @@ export default function HomePage() {
 					) : (
 						/* Results Grid */
 						<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-							{results.map((video) => (
+							{visibleResults.map((video) => (
 								<Card
 									key={video.id}
 									className="group bg-neutral-900 border-neutral-800 hover:border-neutral-700 overflow-hidden cursor-pointer transition flex flex-col shadow-xl hover:shadow-2xl"
@@ -529,7 +669,7 @@ export default function HomePage() {
 
 						{page >= totalPages && (
 							<p className="text-xs text-neutral-500 py-4">
-								Đã hiển thị tất cả {results.length} video
+								Đã tải tất cả {results.length} video, {visibleResults.length} video phù hợp
 							</p>
 						)}
 					</div>
@@ -580,7 +720,10 @@ export default function HomePage() {
 
 						<div className="p-3 bg-neutral-950/60 rounded border border-neutral-800 text-xs text-neutral-400 flex items-center justify-between">
 							<span>
-								Mã Bilibili: <strong className="text-neutral-300 font-mono">{previewVideo?.id}</strong>
+								Mã Bilibili:{" "}
+								<strong className="text-neutral-300 font-mono">
+									{previewVideo?.id}
+								</strong>
 							</span>
 							<a
 								href={previewVideo?.url}

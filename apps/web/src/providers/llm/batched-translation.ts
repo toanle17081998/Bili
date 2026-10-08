@@ -118,8 +118,13 @@ export async function translateInBatches({
 	const policy = await loadDubbingTiming();
 	const inputs = segments.map((source, id) => ({ id, source }));
 	const completed = new Map<number, string>();
+	// The Rust editorial policy is part of the cache identity: a new style must
+	// never reuse translations produced under an earlier prompt.
+	const promptHash = createHash("sha256").update(new Uint8Array(
+		policy.memory.buffer, policy.translation_llm_prompt_ptr(), policy.translation_llm_prompt_len(),
+	)).digest("hex");
 	const cacheFile = (input: TranslationInput) => path.join(cacheDirectory || "", `${createHash("sha256")
-		.update(`${namespace}:v2\0${input.source.end - input.source.start}\0${input.source.text}`).digest("hex")}.json`);
+		.update(`${namespace}:v3:${promptHash}\0${input.source.end - input.source.start}\0${input.source.text}`).digest("hex")}.json`);
 	if (cacheDirectory) {
 		for (const input of inputs) {
 			try {

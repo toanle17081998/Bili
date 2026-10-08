@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "build:search-filter": "node scripts/build-search-filter.mjs",
     "build:tools": "turbo run build --filter=@opencut/tools",
     "build:wasm": "wasm-pack build rust/wasm --target bundler --out-dir pkg",
     "build:watermark": "node scripts/build-watermark.mjs",
