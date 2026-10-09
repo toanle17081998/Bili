@@ -4,10 +4,12 @@ export async function readWatermarkUpload({
 	request,
 	maxBytes,
 	signal,
+	limitMessage = "Video vượt quá 256 MB.",
 }: {
 	request: Request;
 	maxBytes: number;
 	signal: AbortSignal;
+	limitMessage?: string;
 }) {
 	signal.throwIfAborted();
 	if (!request.body) throw new Error("Missing upload body");
@@ -33,7 +35,7 @@ export async function readWatermarkUpload({
 				}
 				total += chunk.value.byteLength;
 				if (total > maxBytes)
-					throw new UploadLimitError("Video vượt quá 256 MB.");
+					throw new UploadLimitError(limitMessage);
 				controller.enqueue(chunk.value);
 			} catch (error) {
 				signal.removeEventListener("abort", onAbort);

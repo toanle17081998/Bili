@@ -3,10 +3,34 @@ import { LocalizationPipeline } from "@/localization/pipeline";
 import path from "path";
 import fs from "fs";
 import { TranslationCooldownError } from "@/providers/llm/free-translate";
+import { z } from "zod";
+import { generateNarrationPreview, NarrationError } from "@/localization/narration";
+import { resolveNarrationSource, retainNarrationSource, readNarrationDuration } from "@/localization/source";
+import { readLocalizationRequest } from "@/localization/http";
+
+const requestSchema = z.object({
+	projectId: z.string().regex(/^[a-zA-Z0-9_-]+$/), videoPath: z.string().optional(),
+	mode: z.enum(["dubbing", "narration"]).default("dubbing"), notes: z.string().max(1000).optional(),
+});
+const narrationJobs = new Map<string, ReturnType<typeof generateNarrationPreview>>();
 
 export async function POST(request: NextRequest) {
 	try {
-		const { projectId, videoPath } = await request.json();
+		const parsed = requestSchema.safeParse(await readLocalizationRequest(request));
+		if (!parsed.success) return NextResponse.json({ success: false, error: "Yêu cầu phân tích video không hợp lệ." }, { status: 400 });
+		const { projectId, videoPath, mode, notes } = parsed.data;
+		if (mode === "narration") {
+			const source = await resolveNarrationSource(projectId, videoPath || "");
+			const key = JSON.stringify([projectId, source, notes]);
+			let job = narrationJobs.get(key);
+			if (!job) {
+				if (narrationJobs.size >= 2) return NextResponse.json({ success: false, error: "AI đang phân tích video khác. Vui lòng thử lại." }, { status: 429 });
+				const release = retainNarrationSource(source);
+				job = readNarrationDuration(source).then((duration) => generateNarrationPreview({ videoPath: source, workDir: path.dirname(source), notes, duration, signal: request.signal })).finally(() => { narrationJobs.delete(key); release(); });
+				narrationJobs.set(key, job);
+			}
+			return NextResponse.json({ success: true, mode, ...await job });
+		}
 
 		let targetVideoPath = videoPath;
 		const downloadsDir = path.join(process.cwd(), ".local_storage", "downloads");
@@ -51,6 +75,7 @@ export async function POST(request: NextRequest) {
 			translations: preview.translations,
 		});
 	} catch (error: unknown) {
+		if (error instanceof NarrationError) return NextResponse.json({ success: false, error: error.message }, { status: error.status });
 		console.error("Localization preview API error:", error);
 		if (error instanceof TranslationCooldownError) {
 			return NextResponse.json(

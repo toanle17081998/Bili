@@ -48,6 +48,11 @@ export type SubtitleSegment = z.infer<typeof SubtitleSegmentSchema>;
 
 export const LocalizedVideoProjectSchema = z.object({
 	id: z.string(),
+	mode: z.enum(["dubbing", "narration"]).optional(),
+	voice: z.string().optional(),
+	timelineStart: z.number().min(0).optional(),
+	sourceSignature: z.string().optional(),
+	sourceElementId: z.string().optional(),
 	source: z.object({
 		provider: z.string(),
 		id: z.string(),

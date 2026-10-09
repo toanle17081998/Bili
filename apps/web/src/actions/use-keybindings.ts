@@ -30,6 +30,11 @@ export function useKeybindingsListener() {
 
 			const binding = getKeybindingString(ev);
 			const activeElement = document.activeElement;
+			if (
+				activeElement instanceof HTMLElement &&
+				activeElement.closest('[role="slider"]') &&
+				["arrowleft", "arrowright", "arrowup", "arrowdown", "home", "end", "pageup", "pagedown"].includes(normalizedKey)
+			) return;
 			const isTextInput =
 				activeElement instanceof HTMLElement &&
 				isTypableDOMElement({ element: activeElement });

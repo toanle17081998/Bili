@@ -20,6 +20,7 @@ import { separateVocals } from "@/media/vocal-separation";
 import { hasOpenAILLMConfig } from "@/providers/openai-compatible";
 import { loadDubbingTiming } from "./timing";
 import { splitIntoShortSubtitles } from "./split";
+import { NarrationError, validateNarrationScript } from "./narration";
 import {
 	LocalizedVideoProjectSchema,
 	TranscriptSegmentSchema,
@@ -38,6 +39,11 @@ export interface LocalizationOptions {
 	workDir: string;
 	voice?: string;
 	customSubtitles?: SubtitleSegment[];
+	mode?: "dubbing" | "narration";
+	timelineStart?: number;
+	sourceSignature?: string;
+	sourceElementId?: string;
+	sourceDuration?: number;
 	onProgress?: (step: string, percent: number) => void;
 }
 
@@ -204,6 +210,11 @@ export class LocalizationPipeline {
 		workDir,
 		voice = "vi-VN-HoaiMyNeural",
 		customSubtitles,
+		mode = "dubbing",
+		timelineStart = 0,
+		sourceSignature,
+		sourceElementId,
+		sourceDuration,
 		onProgress,
 	}: LocalizationOptions): Promise<LocalizedVideoProject> {
 		const outDir = path.join(workDir, projectId);
@@ -213,11 +224,16 @@ export class LocalizationPipeline {
 
 		// 1. Probe source video
 		onProgress?.("Đang kiểm tra thông số video", 10);
-		const probe = await FFmpegService.probeVideo(videoPath);
+		const sourceProbe = await FFmpegService.probeVideo(videoPath);
+		const probe = { ...sourceProbe, duration: mode === "narration" ? sourceDuration ?? sourceProbe.duration : sourceProbe.duration };
 
 		// 2. Extract or separate audio
-		onProgress?.("Trích xuất âm thanh gốc...", 20);
-		const stems = await this.extractOrSeparateAudio(videoPath, outDir);
+		if (mode === "narration") {
+			if (!customSubtitles?.length) throw new NarrationError("Tạo và duyệt kịch bản thuyết minh trước khi tạo giọng.");
+			await validateNarrationScript({ segments: customSubtitles, duration: probe.duration });
+		}
+		onProgress?.(mode === "narration" ? "Chuẩn bị kịch bản thuyết minh..." : "Trích xuất âm thanh gốc...", 20);
+		const stems = mode === "narration" ? undefined : await this.extractOrSeparateAudio(videoPath, outDir);
 
 		let transcript: TranscriptSegment[] = [];
 		let translations: TranslationSegment[] = [];
@@ -238,6 +254,12 @@ export class LocalizationPipeline {
 				vietnameseText: s.text.replace(/\n/g, " "),
 				targetDuration: s.end - s.start,
 			}));
+			if (mode === "narration") {
+				transcript = [];
+				subtitlesToProcess = customSubtitles.flatMap((segment) =>
+					splitIntoShortSubtitles(segment.text, segment.start, segment.end).map((cue, index) => ({ ...cue, id: `${segment.id}-caption-${index}` })),
+				);
+			}
 		} else {
 			// Auto preview & split
 			const preview = await this.generatePreview({
@@ -333,6 +355,11 @@ export class LocalizationPipeline {
 
 		const result: LocalizedVideoProject = {
 			id: projectId,
+			mode,
+			voice,
+			timelineStart,
+			sourceSignature,
+			sourceElementId,
 			source: {
 				provider: "bilibili",
 				id: projectId,
@@ -345,14 +372,15 @@ export class LocalizationPipeline {
 				height: 1920,
 				fps: probe.fps || 30,
 			},
-			backgroundAudioUrl: `/api/media/stream?file=${encodeURIComponent(stems.background)}`,
+			...(stems ? { backgroundAudioUrl: `/api/media/stream?file=${encodeURIComponent(stems.background)}` } : {}),
 			transcript,
 			translations,
 			voiceovers: [combinedVoice],
 			subtitles,
 		};
 
-		await fs.writeFile(path.join(outDir, "latest-project.json"), JSON.stringify(result, null, 2));
+		if (mode === "dubbing") await fs.writeFile(path.join(outDir, "latest-project.json"), JSON.stringify(result, null, 2));
+		await fs.writeFile(path.join(outDir, `latest-${mode}.json`), JSON.stringify(result, null, 2));
 
 		return LocalizedVideoProjectSchema.parse(result);
 	}

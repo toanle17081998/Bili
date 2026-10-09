@@ -6,6 +6,7 @@ import type { SceneTracks } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
+	ripple: "apply" | "preserve";
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
 }
@@ -18,8 +19,8 @@ export class CommandManager {
 
 	constructor(private editor: EditorCore) {}
 
-	execute({ command }: { command: Command }): Command {
-		const beforeTracks = this.isRippleEnabled
+	execute({ command, ripple = "apply" }: { command: Command; ripple?: "apply" | "preserve" }): Command {
+		const beforeTracks = ripple === "apply" && this.isRippleEnabled
 			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
@@ -29,6 +30,7 @@ export class CommandManager {
 		this.runReactors();
 		this.history.push({
 			command,
+			ripple,
 			previousSelection,
 			selectionOverride,
 		});
@@ -39,6 +41,7 @@ export class CommandManager {
 	push({ command }: { command: Command }): void {
 		this.history.push({
 			command,
+			ripple: "apply",
 			previousSelection: this.getSelectionSnapshot(),
 		});
 		this.redoStack = [];
@@ -74,7 +77,7 @@ export class CommandManager {
 			return;
 		}
 
-		const beforeTracks = this.isRippleEnabled
+		const beforeTracks = entry.ripple === "apply" && this.isRippleEnabled
 			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
@@ -85,6 +88,7 @@ export class CommandManager {
 
 		this.history.push({
 			command: entry.command,
+			ripple: entry.ripple,
 			previousSelection,
 			selectionOverride,
 		});

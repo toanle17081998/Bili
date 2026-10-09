@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { volumeControlParams } from "./volume-control";
 import { SparklesIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronRight, Loader2, Mic, Pause, Play } from "lucide-react";
+import { ChevronRight, Loader2, Mic, Pause, Play, ScanEye, Languages, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -26,13 +26,15 @@ import {
 	buildGraphicElement,
 } from "@/timeline/element-utils";
 import { InsertElementCommand } from "@/commands";
-import { mediaTimeFromSeconds, ZERO_MEDIA_TIME } from "@/wasm";
+import { mediaTimeFromSeconds, mediaTimeToSeconds, ZERO_MEDIA_TIME } from "@/wasm";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useLocalStorage } from "@/services/storage/use-local-storage";
 import { VoicePickerDialog } from "./voice-picker-dialog";
 import { VIENEU_PRESET_VOICES } from "@/providers/tts/voices";
 import type { TTSVoice } from "@/providers/tts/types";
 import { cn } from "@/utils/ui";
+import { BackgroundMusicSection } from "./background-music";
 
 interface Props {
 	projectId: string;
@@ -98,6 +100,11 @@ const SUBTITLE_BG_PRESETS = [
 
 export function VietnameseAiPanel({ projectId }: Props) {
 	const editor = useEditor();
+	const [mode, setMode] = useState<"dubbing" | "narration">("dubbing");
+	const [narrationNotes, setNarrationNotes] = useState("");
+	const [narrationCaptions, setNarrationCaptions] = useState(true);
+	const narrationSource = useRef<{ signature: string; videoPath: string; timelineStart: number; elementId: string } | null>(null);
+	const narrationDraftSignature = useRef<string | null>(null);
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
@@ -224,13 +231,13 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		const checkExisting = async () => {
 			try {
 				const res = await fetch(
-					`/api/localization/process?projectId=${encodeURIComponent(projectId)}`,
+					`/api/localization/process?projectId=${encodeURIComponent(projectId)}&mode=${mode}`,
 				);
 				if (!res.ok) return;
 				const data = await res.json();
 				if (!cancelled && data.success && data.localizedProject) {
 					setExistingLocalized(data.localizedProject);
-					if (data.localizedProject.subtitles?.length) {
+					if (mode === "dubbing" && data.localizedProject.subtitles?.length) {
 						setPreviewCues(data.localizedProject.subtitles);
 						setHasPreviewed(true);
 					}
@@ -243,7 +250,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		return () => {
 			cancelled = true;
 		};
-	}, [projectId]);
+	}, [projectId, mode]);
 
 	const updateSubtitleBackground = (
 		patch: Partial<typeof subtitleBackground>,
@@ -391,6 +398,39 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		});
 	};
 
+	const getNarrationSelection = () => {
+		const scene = editor.scenes.getActiveScene();
+		const videos = [scene.tracks.main, ...scene.tracks.overlay].flatMap((track) => track.elements.filter((element) => element.type === "video"));
+		const selected = editor.selection.getSelectedElements();
+		const selectedVideos = videos.filter((element) => selected.some((ref) => ref.elementId === element.id));
+		const video = selectedVideos.length === 1 ? selectedVideos[0] : videos.length === 1 ? videos[0] : null;
+		if (!video) throw new Error("Chọn một video trên timeline để tạo thuyết minh.");
+		if (video.retime) throw new Error("Video đã đổi tốc độ. Xuất video rồi nhập lại trước khi tạo thuyết minh.");
+		const asset = editor.media.getAssets().find((item) => item.id === video.mediaId);
+		if (!asset?.file) throw new Error("Không tìm thấy file video trên timeline.");
+		const start = mediaTimeToSeconds({ time: video.trimStart });
+		const duration = mediaTimeToSeconds({ time: video.duration });
+		const timelineStart = mediaTimeToSeconds({ time: video.startTime });
+		const signature = JSON.stringify([scene.id, video.id, video.mediaId, start, duration, timelineStart, asset.file.size, asset.file.lastModified]);
+		return { asset, start, duration, timelineStart, signature, elementId: video.id };
+	};
+
+	const prepareNarrationSource = async () => {
+		const source = getNarrationSelection();
+		if (narrationSource.current?.signature === source.signature) return narrationSource.current;
+		setProgressStep("Đang chuẩn bị hình ảnh video...");
+		const form = new FormData();
+		form.set("video", source.asset.file);
+		form.set("projectId", projectId);
+		form.set("start", String(source.start));
+		form.set("duration", String(source.duration));
+		const response = await fetch("/api/localization/sources", { method: "POST", body: form });
+		const data = await response.json();
+		if (!response.ok || !data.success) throw new Error(data.error || "Không chuẩn bị được video.");
+		narrationSource.current = { signature: source.signature, videoPath: data.videoPath, timelineStart: source.timelineStart, elementId: source.elementId };
+		return narrationSource.current;
+	};
+
 	const handlePreview = async () => {
 		const importedDataStr = sessionStorage.getItem(
 			`imported_video_${projectId}`,
@@ -402,21 +442,26 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		}
 
 		setIsPreviewing(true);
-		setProgressStep("Đang nhận diện lời thoại & tạo kịch bản phụ đề 1-2 dòng...");
-		const toastId = toast.loading("Đang trích xuất & tạo phụ đề xem trước...");
+		setProgressStep(mode === "narration" ? "Đang phân tích hình ảnh video..." : "Đang nhận diện lời thoại & tạo kịch bản phụ đề 1-2 dòng...");
+		const toastId = toast.loading(mode === "narration" ? "AI đang viết lời thuyết minh..." : "Đang trích xuất & tạo phụ đề xem trước...");
 
 		try {
+			const source = mode === "narration" ? await prepareNarrationSource() : null;
+			if (source) setProgressStep("AI đang tìm mạch kể và viết lời dẫn tự nhiên...");
 			const res = await fetch("/api/localization/preview", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					projectId,
-					videoPath: videoPath || "default",
+					videoPath: source?.videoPath || videoPath || "default",
+					mode,
+					notes: mode === "narration" ? narrationNotes : undefined,
 				}),
 			});
 
 			const data = await res.json();
 			if (!data.success) {
+				if (mode === "narration" && res.status === 404) narrationSource.current = null;
 				throw new Error(data.error || "Không thể tạo bản xem trước phụ đề");
 			}
 
@@ -428,9 +473,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			}));
 
 			setPreviewCues(cues);
+			narrationDraftSignature.current = source?.signature ?? null;
 			setHasPreviewed(true);
-			toast.success(`Đã tạo ${cues.length} câu phụ đề xem trước!`, { id: toastId });
-			setProgressStep(`Sẵn sàng xem trước: ${cues.length} câu phụ đề (1-2 dòng). Bạn có thể chỉnh sửa trước khi tạo giọng.`);
+			toast.success(`Đã tạo ${cues.length} đoạn ${mode === "narration" ? "thuyết minh" : "phụ đề"}!`, { id: toastId });
+			setProgressStep(mode === "narration" ? "Kịch bản đã sẵn sàng để duyệt." : `Sẵn sàng xem trước: ${cues.length} câu phụ đề (1-2 dòng). Bạn có thể chỉnh sửa trước khi tạo giọng.`);
 		} catch (err: any) {
 			toast.error(err.message || "Lỗi khi xem trước phụ đề", { id: toastId });
 			setProgressStep(null);
@@ -445,6 +491,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			next[index] = { ...next[index], text: newText };
 			return next;
 		});
+	};
+	const updateCueTime = (index: number, field: "start" | "end", value: number) => {
+		if (!Number.isFinite(value)) return;
+		setPreviewCues((current) => current.map((cue, i) => i === index ? { ...cue, [field]: value } : cue));
 	};
 
 	const removeCue = (index: number) => {
@@ -472,12 +522,18 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		localized: any,
 		toastId?: string | number,
 	) => {
-		if (!localized.backgroundAudioUrl) {
+		const narrationId = localized.sourceElementId ?? projectId;
+		const captionStorageKey = localized.mode === "narration" ? `ai-narration-caption-track-${projectId}-${narrationId}` : `ai-caption-track-${projectId}`;
+		const resultStorageKey = localized.mode === "narration" ? `narrated_${projectId}_${narrationId}` : `localized_${projectId}`;
+		if (localized.mode === "narration" && localized.sourceSignature !== getNarrationSelection().signature) {
+			throw new Error("Video hoặc vị trí trên timeline đã thay đổi. Vui lòng phân tích lại.");
+		}
+		if (localized.mode !== "narration" && !localized.backgroundAudioUrl) {
 			throw new Error("Chưa tách được giọng gốc. Vui lòng thử lại trước khi gắn lồng tiếng.");
 		}
 
 		// Update preview cues from result if not already previewed
-		if (!hasPreviewed && localized.subtitles) {
+		if (localized.mode !== "narration" && !hasPreviewed && localized.subtitles) {
 			setPreviewCues(localized.subtitles);
 			setHasPreviewed(true);
 		}
@@ -506,7 +562,8 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			);
 			const audio = await fetch(segment.audioUrl);
 			if (!audio.ok) throw new Error("Không thể nạp giọng đọc đã tạo.");
-			const file = new File([await audio.blob()], `${segment.id}.wav`, {
+			const fileName = localized.mode === "narration" ? `voice-narration-${narrationId}-${segment.id}.wav` : `${segment.id}.wav`;
+			const file = new File([await audio.blob()], fileName, {
 				type: "audio/wav",
 			});
 			const [processed] = await processMediaAssets({ files: [file] });
@@ -528,7 +585,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				duration: mediaTimeFromSeconds({
 					seconds: Math.min(durationSeconds, segment.duration),
 				}),
-				startTime: mediaTimeFromSeconds({ seconds: segment.start }),
+				startTime: mediaTimeFromSeconds({ seconds: segment.start + (localized.timelineStart ?? 0) }),
 			});
 			Object.assign(
 				element.params,
@@ -542,6 +599,8 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		}
 
 		setProgressStep("Đang dọn dẹp các track cũ và đưa âm thanh lên timeline...");
+		if (localized.mode === "narration" && localized.sourceSignature !== getNarrationSelection().signature)
+			throw new Error("Video hoặc vị trí trên timeline đã thay đổi. Vui lòng phân tích lại.");
 		const scene = editor.scenes.getActiveScene();
 		const sourceMediaIds = new Set(
 			[scene.tracks.main, ...scene.tracks.overlay].flatMap((track) =>
@@ -551,9 +610,9 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			),
 		);
 		const previousCaptionTrack = localStorage.getItem(
-			`ai-caption-track-${projectId}`,
+			captionStorageKey,
 		);
-		const previousResult = sessionStorage.getItem(`localized_${projectId}`);
+		const previousResult = sessionStorage.getItem(resultStorageKey);
 		const previousTexts = new Set<string>(
 			previousResult
 				? (JSON.parse(previousResult).subtitles ?? []).map(
@@ -590,8 +649,9 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						.filter(
 							(element) =>
 								(element.type === "audio" &&
-									(element.name.startsWith("voice-") ||
-										element.name.startsWith("ai-background"))) ||
+									(localized.mode === "narration"
+										? element.name.startsWith(`voice-narration-${narrationId}-`)
+										: element.name.startsWith("voice-") || element.name.startsWith("ai-background"))) ||
 								((track.id === previousCaptionTrack ||
 									legacyCaptionTracks.has(track.id)) &&
 									element.type === "text"),
@@ -642,14 +702,14 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		);
 
 		// Convert subtitles into OpenCut cues and insert on timeline
-		if (localized.subtitles && localized.subtitles.length > 0) {
+		if ((localized.mode !== "narration" || narrationCaptions) && localized.subtitles && localized.subtitles.length > 0) {
 			setProgressStep("Đang tạo và gắn phụ đề tiếng Việt vào timeline...");
 			const cues: SubtitleCue[] = localized.subtitles.map((sub: any) => ({
 				text:
 					subtitleStyle === "yellow-reference"
 						? sub.text.replace(/\n/g, " ")
 						: sub.text,
-				startTime: sub.start,
+				startTime: sub.start + (localized.timelineStart ?? 0),
 				duration: Math.max(0.6, sub.end - sub.start),
 				style: {
 					fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
@@ -689,22 +749,22 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				captions: cues,
 			});
 			if (captionTrack)
-				localStorage.setItem(`ai-caption-track-${projectId}`, captionTrack);
+				localStorage.setItem(captionStorageKey, captionTrack);
 		}
 
 		// Save localized result for export
 		sessionStorage.setItem(
-			`localized_${projectId}`,
+			resultStorageKey,
 			JSON.stringify(localized),
 		);
 		await editor.project.saveCurrentProject();
 
 		if (toastId) {
-			toast.success("Việt hóa thành công! Đã gắn vào timeline.", {
+			toast.success(localized.mode === "narration" ? "Đã thêm thuyết minh vào timeline." : "Việt hóa thành công! Đã gắn vào timeline.", {
 				id: toastId,
 			});
 		} else {
-			toast.success("Đã gắn bản Việt hóa vào timeline!");
+			toast.success(localized.mode === "narration" ? "Đã thêm thuyết minh vào timeline." : "Đã gắn bản Việt hóa vào timeline!");
 		}
 
 		setProgressStep(
@@ -728,12 +788,19 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		const toastId = toast.loading("Đang xử lý Việt hóa video...");
 
 		try {
+			const source = mode === "narration" ? narrationSource.current : null;
+			if (mode === "narration" && (!source || !hasPreviewed || !previewCues.length || narrationDraftSignature.current !== getNarrationSelection().signature))
+				throw new Error("Tạo và duyệt kịch bản cho video hiện tại trước khi tạo giọng.");
 			const res = await fetch("/api/localization/process", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					projectId,
-					videoPath: videoPath || "default",
+					videoPath: source?.videoPath || videoPath || "default",
+					mode,
+					timelineStart: source?.timelineStart,
+					sourceSignature: source?.signature,
+					sourceElementId: source?.elementId,
 					voice,
 					subtitles:
 						hasPreviewed && previewCues.length > 0
@@ -773,11 +840,36 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				</span>
 			</div>
 
+			<Tabs value={mode} onValueChange={(value) => {
+				if (isProcessing || isPreviewing) return;
+				setMode(value as "dubbing" | "narration");
+				setPreviewCues([]);
+				setHasPreviewed(false);
+				setExistingLocalized(null);
+				setProgressStep(null);
+				narrationDraftSignature.current = null;
+			}}>
+				<TabsList className="grid w-full grid-cols-2">
+					<TabsTrigger value="dubbing" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><Languages className="size-3.5" />Lồng tiếng</TabsTrigger>
+					<TabsTrigger value="narration" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><ScanEye className="size-3.5" />Thuyết minh AI</TabsTrigger>
+				</TabsList>
+			</Tabs>
+			{mode === "narration" && <div className="flex flex-col gap-2">
+				<Label htmlFor="narration-notes" className="text-xs text-neutral-400">Ngữ cảnh & phong cách kể (tùy chọn)</Label>
+				<textarea id="narration-notes" aria-describedby="narration-notes-help" placeholder="Ví dụ: Kể gần gũi, gợi tò mò, hài nhẹ; nhấn vào sự tỉ mỉ khi làm mô hình." value={narrationNotes} maxLength={1000} rows={3} disabled={isProcessing || isPreviewing}
+					onChange={(event) => setNarrationNotes(event.target.value)} className="w-full resize-none rounded-md border border-neutral-700 bg-neutral-950 p-2 text-xs focus:outline-none focus:border-rose-500" />
+				<p id="narration-notes-help" className="text-[11px] leading-relaxed text-neutral-400">AI tìm mạch kể, thêm góc nhìn và cảm xúc, chừa nhịp nghỉ cho hình ảnh. Bạn có thể gợi ý giọng kể và đối tượng xem.</p>
+				<div className="flex items-center gap-2">
+					<Checkbox id="narration-captions" checked={narrationCaptions} disabled={isProcessing || isPreviewing} onCheckedChange={(checked) => setNarrationCaptions(checked === true)} />
+					<Label htmlFor="narration-captions" className="text-xs">Tạo kèm phụ đề</Label>
+				</div>
+			</div>}
+			<BackgroundMusicSection key={projectId} projectId={projectId} disabled={isProcessing || isPreviewing} />
 			{/* Controls Form */}
-			<p className="text-[11px] text-neutral-400 leading-relaxed">
+			{mode === "dubbing" && <p className="text-[11px] text-neutral-400 leading-relaxed">
 				Phụ đề chia ngắn để dễ đọc. Giọng đọc được gom theo đoạn liền mạch,
 				giữ các khoảng nghỉ và ghép thành một track trên timeline.
-			</p>
+			</p>}
 			<div className="flex flex-col gap-4">
 				{/* Voice selector */}
 				<div className="flex flex-col gap-2">
@@ -908,7 +1000,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				</div>
 
 				{/* Original Volume */}
-				<div className="flex flex-col gap-1.5">
+				{mode === "dubbing" && <div className="flex flex-col gap-1.5">
 					<div className="flex justify-between text-xs">
 						<span className="text-neutral-400">Âm thanh gốc</span>
 						<span className="text-neutral-300 font-mono">
@@ -927,7 +1019,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						step={5}
 						className="py-1"
 					/>
-				</div>
+				</div>}
 
 				{/* Voiceover Volume */}
 				<div className="flex flex-col gap-1.5">
@@ -952,6 +1044,8 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				</div>
 
 				{/* Subtitle Style */}
+				<details key={mode} open={mode === "dubbing" ? true : undefined} className={cn(mode === "narration" && !narrationCaptions && "hidden")}>
+					<summary className={cn("cursor-pointer text-xs text-neutral-400", mode === "dubbing" && "hidden")}>Kiểu phụ đề</summary>
 				<div className="flex flex-col gap-1.5">
 					<Label className="text-xs text-neutral-400">Phong cách phụ đề</Label>
 					<Select value={subtitleStyle} onValueChange={selectSubtitleStyle}>
@@ -1237,6 +1331,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						</div>
 					)}
 				</div>
+				</details>
 			</div>
 
 			{/* Subtitle Preview Section */}
@@ -1245,15 +1340,15 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					<div className="flex flex-col gap-2">
 						<div className="flex items-center justify-between">
 							<span className="text-xs font-semibold text-neutral-200">
-								Xem trước phụ đề
+								{mode === "narration" ? "Kịch bản thuyết minh" : "Xem trước phụ đề"}
 							</span>
 							<span className="text-[10px] bg-rose-500/15 text-rose-300 px-1.5 py-0.5 rounded border border-rose-500/20 font-mono">
-								1-2 dòng/câu
+								{mode === "narration" ? "AI hình ảnh" : "1-2 dòng/câu"}
 							</span>
 						</div>
-						<p className="text-[11px] text-neutral-400 leading-relaxed">
+						{mode === "dubbing" && <p className="text-[11px] text-neutral-400 leading-relaxed">
 							Tự động tách câu thành các đoạn ngắn 1-2 dòng chuẩn TikTok / Reels. Bạn có thể xem trước và chỉnh sửa lời thoại trước khi AI thu âm.
-						</p>
+						</p>}
 						<Button
 							type="button"
 							variant="outline"
@@ -1261,7 +1356,8 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							onClick={handlePreview}
 							className="mt-1 w-full border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-xs py-2 h-8"
 						>
-							{isPreviewing ? "Đang phân tích kịch bản..." : "📝 Xem trước kịch bản phụ đề"}
+							{isPreviewing ? <Loader2 className="size-3.5 animate-spin" /> : <ScanEye className="size-3.5" />}
+							{isPreviewing ? "Đang phân tích..." : mode === "narration" ? "Phân tích video & Viết lời" : "Xem trước kịch bản phụ đề"}
 						</Button>
 					</div>
 				) : (
@@ -1269,19 +1365,21 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						<div className="flex items-center justify-between">
 							<div className="flex items-center gap-2">
 								<span className="text-xs font-semibold text-neutral-200">
-									Phụ đề ({previewCues.length} đoạn)
+									{mode === "narration" ? "Thuyết minh" : "Phụ đề"} ({previewCues.length} đoạn)
 								</span>
 								<span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/40 px-1.5 py-0.5 rounded">
-									Tối đa 1-2 dòng
+									{mode === "narration" ? "Chờ duyệt" : "Tối đa 1-2 dòng"}
 								</span>
 							</div>
 							<button
 								type="button"
+								title="Tạo lại kịch bản"
+								aria-label="Tạo lại kịch bản"
 								disabled={isProcessing || isPreviewing}
 								onClick={handlePreview}
 								className="text-[11px] text-rose-400 hover:text-rose-300 hover:underline"
 							>
-								{isPreviewing ? "Đang tải..." : "Làm mới"}
+								<RefreshCw className={cn("size-3.5", isPreviewing && "animate-spin")} aria-label="Tạo lại kịch bản" />
 							</button>
 						</div>
 
@@ -1294,9 +1392,16 @@ export function VietnameseAiPanel({ projectId }: Props) {
 										className="flex flex-col gap-1 rounded border border-neutral-800 bg-neutral-900/90 p-2 text-xs"
 									>
 										<div className="flex items-center justify-between text-[10px] text-neutral-400">
-											<span className="font-mono bg-neutral-800 px-1.5 py-0.5 rounded">
+											{mode === "narration" ? <div className="flex min-w-0 items-center gap-1">
+												<input type="number" min={0} step={0.1} value={cue.start} disabled={isProcessing || isPreviewing} aria-label={`Bắt đầu đoạn ${index + 1}`}
+													onChange={(event) => updateCueTime(index, "start", event.target.valueAsNumber)} className="w-16 min-w-0 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5" />
+												<span>-</span>
+												<input type="number" min={0} step={0.1} value={cue.end} disabled={isProcessing || isPreviewing} aria-label={`Kết thúc đoạn ${index + 1}`}
+													onChange={(event) => updateCueTime(index, "end", event.target.valueAsNumber)} className="w-16 min-w-0 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5" />
+												<span>s</span>
+											</div> : <span className="font-mono bg-neutral-800 px-1.5 py-0.5 rounded">
 												{cue.start.toFixed(1)}s ➔ {cue.end.toFixed(1)}s
-											</span>
+											</span>}
 											<div className="flex items-center gap-1.5">
 												<span
 													className={`px-1.5 py-0.5 rounded font-mono ${
@@ -1309,16 +1414,20 @@ export function VietnameseAiPanel({ projectId }: Props) {
 												</span>
 												<button
 													type="button"
+													disabled={isProcessing || isPreviewing}
 													onClick={() => removeCue(index)}
 													className="text-neutral-500 hover:text-rose-400 ml-1 text-xs"
 													title="Xóa câu này"
 												>
-													✕
+													<Trash2 className="size-3.5" />
 												</button>
 											</div>
 										</div>
 										<textarea
 											value={cue.text}
+											maxLength={2000}
+											disabled={isProcessing || isPreviewing}
+											aria-label={`Lời đọc đoạn ${index + 1}`}
 											rows={Math.min(3, Math.max(2, lineCount))}
 											onChange={(e) => updateCueText(index, e.target.value)}
 											className="w-full resize-none rounded bg-neutral-950 border border-neutral-800 p-1.5 text-xs text-neutral-100 focus:outline-none focus:border-rose-500"
@@ -1334,13 +1443,14 @@ export function VietnameseAiPanel({ projectId }: Props) {
 								type="button"
 								variant="ghost"
 								size="sm"
+								disabled={isProcessing || isPreviewing}
 								onClick={addCue}
 								className="text-xs text-neutral-400 hover:text-neutral-200 h-7 px-2"
 							>
-								+ Thêm câu phụ đề
+									<Plus className="size-3.5" />{mode === "narration" ? "Thêm đoạn" : "Thêm câu phụ đề"}
 							</Button>
 							<span className="text-[10px] text-neutral-500">
-								Chuẩn 1-2 dòng TikTok
+								{mode === "narration" ? "Mốc thời gian: giây" : "Chuẩn 1-2 dòng TikTok"}
 							</span>
 						</div>
 					</div>
@@ -1352,15 +1462,15 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				<div className="flex flex-col gap-2 p-3 bg-emerald-950/40 rounded-lg border border-emerald-800/60 text-xs">
 					<div className="flex items-center justify-between text-emerald-400 font-semibold">
 						<span className="flex items-center gap-1.5">
-							<span>🎉</span> Bản Việt hóa đã sẵn sàng
+							<Mic className="size-3.5" />{mode === "narration" ? "Thuyết minh đã sẵn sàng" : "Bản Việt hóa đã sẵn sàng"}
 						</span>
 						<span className="text-[10px] bg-emerald-900/60 text-emerald-300 px-1.5 py-0.5 rounded font-mono">
 							Đã tạo xong
 						</span>
 					</div>
-					<p className="text-[11px] text-neutral-300 leading-relaxed">
+					{mode === "dubbing" && <p className="text-[11px] text-neutral-300 leading-relaxed">
 						Video này đã có nhạc nền tách tiếng và giọng đọc AI hoàn tất trên máy chủ. Bạn có thể gắn thẳng vào timeline ngay lập tức!
-					</p>
+					</p>}
 					<Button
 						type="button"
 						size="sm"
@@ -1386,13 +1496,15 @@ export function VietnameseAiPanel({ projectId }: Props) {
 
 			{/* Primary Action Button */}
 			<Button
-				disabled={isProcessing || isPreviewing}
-				onClick={() => handleLocalize(Boolean(existingLocalized))}
+				disabled={isProcessing || isPreviewing || (mode === "narration" && hasPreviewed && !previewCues.length)}
+				onClick={() => mode === "narration" && !hasPreviewed ? handlePreview() : handleLocalize(Boolean(existingLocalized))}
 				className="w-full bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white font-medium text-xs py-5 shadow-lg shadow-rose-900/20"
 			>
 				<HugeiconsIcon icon={SparklesIcon} className="size-4 mr-2" />
 				{isProcessing
 					? "Đang xử lý..."
+					: mode === "narration"
+						? isPreviewing ? "Đang phân tích..." : hasPreviewed ? "Tạo giọng & Gắn timeline" : "Phân tích video & Viết lời"
 					: existingLocalized
 						? "🔄 Tạo lại bản Việt hóa mới"
 						: hasPreviewed
