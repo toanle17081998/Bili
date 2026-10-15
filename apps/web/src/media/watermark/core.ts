@@ -28,20 +28,35 @@ async function loadCore() {
 		watermark_region_count: count,
 		watermark_output_ptr: pointer,
 		watermark_output_len: length,
+		video_upload_max_bytes: uploadMaxBytes,
 	} = instance.exports;
 	if (
 		!(memory instanceof WebAssembly.Memory) ||
 		typeof plan !== "function" ||
 		typeof count !== "function" ||
 		typeof pointer !== "function" ||
-		typeof length !== "function"
+		typeof length !== "function" ||
+		typeof uploadMaxBytes !== "function"
 	) {
 		throw new Error("Invalid watermark Rust module");
 	}
-	return { memory, plan, count, pointer, length };
+	return { memory, plan, count, pointer, length, uploadMaxBytes };
 }
 
 let corePromise: ReturnType<typeof loadCore> | undefined;
+
+function getCore() {
+	corePromise ??= loadCore().catch((error: unknown) => {
+		corePromise = undefined;
+		throw error;
+	});
+	return corePromise;
+}
+
+export async function getVideoUploadMaxBytes(): Promise<number> {
+	const core = await getCore();
+	return Number(core.uploadMaxBytes());
+}
 
 export async function planWatermarkFilters({
 	video,
@@ -50,11 +65,7 @@ export async function planWatermarkFilters({
 	video: Pick<VideoProbeResult, "width" | "height" | "duration">;
 	regions: WatermarkRegion[];
 }): Promise<string[]> {
-	corePromise ??= loadCore().catch((error: unknown) => {
-		corePromise = undefined;
-		throw error;
-	});
-	const core = await corePromise;
+	const core = await getCore();
 	const check = (code: number) => {
 		if (code !== 0)
 			throw new WatermarkValidationError(

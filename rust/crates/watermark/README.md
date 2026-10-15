@@ -28,7 +28,8 @@ rebuilding. FFmpeg/FFprobe must be on PATH, or set `FFMPEG_PATH`/`FFPROBE_PATH` 
 `apps/web/.env.local`. Jobs use `.local_storage/watermark-removals/`; source uploads
 are removed after processing. Server preview copies expire after one hour; applied
 videos are stored separately in the project's media storage and are not expired.
-Multipart ingestion is bounded to 256 MB plus framing, including chunked uploads.
+Rust owns the shared 1 GiB video upload limit for watermark removal and narration.
+Multipart ingestion is bounded to 1 GiB plus framing, including chunked uploads.
 Cancelling stops both probing and encoding before temporary-file cleanup.
 
 Tests:

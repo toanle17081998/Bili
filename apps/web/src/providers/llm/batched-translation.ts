@@ -168,7 +168,15 @@ export async function translateInBatches({
 		batches.push(batch);
 	}
 	const translateBatch = async (batch: TranslationInput[]) => {
-		await translate(batch);
+		try {
+			await translate(batch);
+		} catch (error: unknown) {
+			if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+				console.warn("LLM batch translation timed out; attempting segment repair.");
+			} else {
+				throw error;
+			}
+		}
 		for (const input of batch) {
 			for (let attempt = 0; !completed.has(input.id) && attempt < policy.translation_llm_repair_attempts(); attempt++) {
 				await translate([input]);

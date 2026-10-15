@@ -67,6 +67,7 @@ import { ProjectInfoDialog } from "@/project/components/project-info-dialog";
 import { RenameProjectDialog } from "@/project/components/rename-project-dialog";
 import { cn } from "@/utils/ui";
 import { ChangelogNotification } from "@/changelog/components/changelog-notification";
+import { SplitVideoRecovery } from "@/components/editor/split-video-recovery";
 const formatProjectDuration = ({
 	duration,
 }: {
@@ -98,9 +99,7 @@ export default function ProjectsPage() {
 	);
 
 	useEffect(() => {
-		if (!editor.project.getIsInitialized()) {
-			editor.project.loadAllProjects();
-		}
+		void editor.project.loadAllProjects();
 	}, [editor.project]);
 
 	return (
@@ -110,6 +109,7 @@ export default function ProjectsPage() {
 			<ChangelogNotification />
 			<ProjectsHeader />
 			<ProjectsToolbar projectIds={projectsToDisplay.map((p) => p.id)} />
+			<SplitVideoRecovery />
 			<main className="mx-auto px-4 pt-2 pb-6 flex flex-col gap-4">
 				{isLoading || !isInitialized ? (
 					<ProjectsSkeleton />

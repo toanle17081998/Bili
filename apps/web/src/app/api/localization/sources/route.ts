@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { FFmpegService } from "@/media/ffmpeg";
+import { getVideoUploadMaxBytes } from "@/media/watermark/core";
 import {
 	readWatermarkUpload,
 	UploadLimitError,
@@ -16,7 +17,6 @@ import {
 } from "@/localization/source";
 
 export const runtime = "nodejs";
-const MAX_BYTES = 256 * 1024 * 1024;
 const inputSchema = z.object({
 	projectId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 	start: z.coerce.number().nonnegative(),
@@ -35,11 +35,6 @@ export async function POST(request: NextRequest) {
 			{ success: false, error: "Đang chuẩn bị video khác. Vui lòng thử lại." },
 			{ status: 429 },
 		);
-	if (Number(request.headers.get("content-length")) > MAX_BYTES + 1024 * 1024)
-		return NextResponse.json(
-			{ success: false, error: "Video vượt quá 256 MB." },
-			{ status: 413 },
-		);
 	activeUploads++;
 	let directory: string | undefined;
 	let release = () => {};
@@ -48,9 +43,12 @@ export async function POST(request: NextRequest) {
 		AbortSignal.timeout(10 * 60_000),
 	]);
 	try {
+		const maxBytes = await getVideoUploadMaxBytes();
+		if (Number(request.headers.get("content-length")) > maxBytes + 1024 * 1024)
+			throw new UploadLimitError("Video vượt quá 1 GB.");
 		const form = await readWatermarkUpload({
 			request,
-			maxBytes: MAX_BYTES + 1024 * 1024,
+			maxBytes: maxBytes + 1024 * 1024,
 			signal,
 		});
 		const parsed = inputSchema.safeParse({
@@ -59,11 +57,12 @@ export async function POST(request: NextRequest) {
 			duration: form.get("duration"),
 		});
 		const file = form.get("video");
+		if (file instanceof File && file.size > maxBytes)
+			throw new UploadLimitError("Video vượt quá 1 GB.");
 		if (
 			!parsed.success ||
 			!(file instanceof File) ||
-			!file.size ||
-			file.size > MAX_BYTES
+			!file.size
 		)
 			throw new NarrationError(
 				"Video hoặc khoảng thời gian không hợp lệ.",
@@ -72,7 +71,9 @@ export async function POST(request: NextRequest) {
 		const { projectId, start, duration } = parsed.data;
 		const policy = await loadDubbingTiming();
 		if (!policy.narration_frame_count(duration))
-			throw new NarrationError("Mỗi video thuyết minh tối đa 10 phút.");
+			throw new NarrationError(
+				"Mỗi video thuyết minh tối đa " + policy.narration_max_duration() / 60 + " phút.",
+			);
 		const root = path.resolve(
 			process.cwd(),
 			".local_storage",

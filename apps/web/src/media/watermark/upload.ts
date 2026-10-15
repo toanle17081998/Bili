@@ -4,7 +4,7 @@ export async function readWatermarkUpload({
 	request,
 	maxBytes,
 	signal,
-	limitMessage = "Video vượt quá 256 MB.",
+	limitMessage = "Video vượt quá 1 GB.",
 }: {
 	request: Request;
 	maxBytes: number;

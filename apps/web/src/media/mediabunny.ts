@@ -9,7 +9,10 @@ import { createTimelineAudioBuffer } from "@/media/audio";
 import type { SceneTracks } from "@/timeline";
 import type { MediaAsset } from "@/media/types";
 import { TICKS_PER_SECOND } from "@/wasm";
-import { renderThumbnailDataUrl } from "./thumbnail";
+import {
+	FILMSTRIP_FRAME_COUNT,
+	renderFilmstripDataUrl,
+} from "./thumbnail";
 
 export type VideoFileData = {
 	duration: number;
@@ -47,19 +50,35 @@ export async function readVideoFile({
 		let thumbnailUrl: string | null = null;
 		if (canDecode) {
 			const sink = new VideoSampleSink(videoTrack);
-			const frame = await sink.getSample(1);
-			if (frame) {
-				try {
-					thumbnailUrl = renderThumbnailDataUrl({
+			// Sample timestamps evenly across the video. The +0.5 offset
+			// avoids landing exactly on the first/last frame, and the
+			// Math.min clamp keeps us inside the duration for very short clips.
+			const safeDuration = Math.max(duration, 0.001);
+			const frameTimestamps: number[] = [];
+			for (let i = 0; i < FILMSTRIP_FRAME_COUNT; i++) {
+				const t = (safeDuration * (i + 0.5)) / FILMSTRIP_FRAME_COUNT;
+				frameTimestamps.push(Math.max(0, Math.min(t, safeDuration - 0.01)));
+			}
+
+			const frames: Awaited<ReturnType<typeof sink.getSample>>[] = [];
+			try {
+				for (const timestamp of frameTimestamps) {
+					const frame = await sink.getSample(timestamp);
+					if (frame) frames.push(frame);
+				}
+
+				if (frames.length > 0) {
+					thumbnailUrl = renderFilmstripDataUrl({
 						width: videoTrack.displayWidth,
 						height: videoTrack.displayHeight,
-						draw: ({ context, width, height }) => {
-							frame.draw(context, 0, 0, width, height);
+						frameCount: frames.length,
+						drawFrame: ({ context, width, height, frameIndex }) => {
+							frames[frameIndex]?.draw(context, 0, 0, width, height);
 						},
 					});
-				} finally {
-					frame.close();
 				}
+			} finally {
+				for (const frame of frames) frame.close();
 			}
 		}
 

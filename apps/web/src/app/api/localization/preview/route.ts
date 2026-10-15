@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 		const { projectId, videoPath, mode, notes } = parsed.data;
 		if (mode === "narration") {
 			const source = await resolveNarrationSource(projectId, videoPath || "");
-			const key = JSON.stringify([projectId, source, notes]);
+			const key = JSON.stringify([projectId, source, notes ?? ""]);
 			let job = narrationJobs.get(key);
 			if (!job) {
 				if (narrationJobs.size >= 2) return NextResponse.json({ success: false, error: "AI đang phân tích video khác. Vui lòng thử lại." }, { status: 429 });

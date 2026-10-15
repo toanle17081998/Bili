@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { removeVideoWatermarks } from "@/media/watermark/processing";
-import { WatermarkValidationError } from "@/media/watermark/core";
+import {
+	getVideoUploadMaxBytes,
+	WatermarkValidationError,
+} from "@/media/watermark/core";
 import {
 	readWatermarkUpload,
 	UploadLimitError,
@@ -16,7 +19,6 @@ import {
 
 export const runtime = "nodejs";
 
-const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const regionSchema = z.object({
 	x: z.number(),
 	y: z.number(),
@@ -39,15 +41,6 @@ export async function POST(request: NextRequest) {
 			{ success: false, error: "Đang xử lý video khác. Vui lòng thử lại." },
 			{ status: 429, headers: { "Retry-After": "15" } },
 		);
-	if (
-		Number(request.headers.get("content-length")) >
-		MAX_FILE_BYTES + 1024 * 1024
-	) {
-		return NextResponse.json(
-			{ success: false, error: "Video vượt quá 256 MB." },
-			{ status: 413 },
-		);
-	}
 	activeJobs++;
 	let directory: string | undefined;
 	const root = path.resolve(
@@ -60,17 +53,25 @@ export async function POST(request: NextRequest) {
 		AbortSignal.timeout(15 * 60_000),
 	]);
 	try {
+		const maxFileBytes = await getVideoUploadMaxBytes();
+		if (
+			Number(request.headers.get("content-length")) >
+			maxFileBytes + 1024 * 1024
+		)
+			throw new UploadLimitError("Video vượt quá 1 GB.");
 		const form = await readWatermarkUpload({
 			request,
-			maxBytes: MAX_FILE_BYTES + 1024 * 1024,
+			maxBytes: maxFileBytes + 1024 * 1024,
 			signal,
 		});
 		const file = form.get("video");
-		if (!(file instanceof File) || !file.size || file.size > MAX_FILE_BYTES) {
+		if (file instanceof File && file.size > maxFileBytes)
+			throw new UploadLimitError("Video vượt quá 1 GB.");
+		if (!(file instanceof File) || !file.size) {
 			return NextResponse.json(
 				{
 					success: false,
-					error: "Chọn video có dung lượng từ 1 byte đến 256 MB.",
+					error: "Chọn video có dung lượng từ 1 byte đến 1 GB.",
 				},
 				{ status: 400 },
 			);

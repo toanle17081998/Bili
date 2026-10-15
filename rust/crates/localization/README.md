@@ -65,8 +65,15 @@ The AI panel's narration mode analyzes the selected video's images, not its audi
 It first identifies the whole video's throughline, tone and evidence-backed story
 beats, then makes a second text-only request to write a spoken narrative. The writer
 adds curiosity, commentary and emotional rhythm rather than captioning every frame;
-it preserves pauses, aligns reveals with the evidence and respects unknown facts.
-Optional notes can guide the audience and delivery style, not invent video events.
+it aligns reveals with the evidence and respects unknown facts. Default delivery is
+dense Vietnamese Gen Z narration: aim for 85–95% spoken coverage where evidence
+supports it, 3.2–3.8 whitespace-delimited words per spoken second, and brief pauses.
+The hard 4-words-per-second bound is unchanged. Density comes from connected
+commentary, not faster playback, repeated filler or invented events.
+Contextual slang examples are an editorial vocabulary, not a live TikTok ranking;
+optional notes can supply preferred memes, audience and delivery style, including
+quieter or formal narration. The writer uses suitable phrases without keyword
+stuffing, and never treats notes as proof of video events or a trend's popularity.
 Both stages use the configured provider, so a preview makes two model requests.
 The user reviews or edits the timestamped script before requesting VieNeu speech.
 Narration never runs transcription, translation or vocal separation. Source audio
@@ -81,8 +88,8 @@ optional context only when analysis is requested; provider usage may be billed.
 VieNeu and FFmpeg must also be available for speech and local media processing.
 
 Rust owns both narration prompts, output-token budgets, sampling, script bounds and proxy budgets:
-videos up to 10 minutes, at most 72 sampled images, 100 narration segments,
-8 KiB per segment and 64 KiB total text. Uploaded files are limited to 256 MiB;
+videos up to 60 minutes, at most 72 sampled images, 100 narration segments,
+8 KiB per segment and 64 KiB total text. Uploaded files are limited to 1 GiB;
 analysis proxies are limited to 512px, 2 fps and 64 MiB. Temporary sources expire
 after 24 hours, with up to 16 per project; active jobs retain their sources.
 Final narration audio is stored independently from the temporary proxy and from

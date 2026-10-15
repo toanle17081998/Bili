@@ -855,10 +855,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				</TabsList>
 			</Tabs>
 			{mode === "narration" && <div className="flex flex-col gap-2">
-				<Label htmlFor="narration-notes" className="text-xs text-neutral-400">Ngữ cảnh & phong cách kể (tùy chọn)</Label>
-				<textarea id="narration-notes" aria-describedby="narration-notes-help" placeholder="Ví dụ: Kể gần gũi, gợi tò mò, hài nhẹ; nhấn vào sự tỉ mỉ khi làm mô hình." value={narrationNotes} maxLength={1000} rows={3} disabled={isProcessing || isPreviewing}
+				<Label htmlFor="narration-notes" className="text-xs text-neutral-400">Ngữ cảnh, phong cách & từ khóa ưu tiên (tùy chọn)</Label>
+				<textarea id="narration-notes" aria-describedby="narration-notes-help" placeholder="Ví dụ: Kể dày, hài nhẹ cho Gen Z; nhấn vào độ tỉ mỉ. Từ khóa/meme ưu tiên: ê khoan, có gu, lên trình." value={narrationNotes} maxLength={1000} rows={3} disabled={isProcessing || isPreviewing}
 					onChange={(event) => setNarrationNotes(event.target.value)} className="w-full resize-none rounded-md border border-neutral-700 bg-neutral-950 p-2 text-xs focus:outline-none focus:border-rose-500" />
-				<p id="narration-notes-help" className="text-[11px] leading-relaxed text-neutral-400">AI tìm mạch kể, thêm góc nhìn và cảm xúc, chừa nhịp nghỉ cho hình ảnh. Bạn có thể gợi ý giọng kể và đối tượng xem.</p>
+				<p id="narration-notes-help" className="text-[11px] leading-relaxed text-neutral-400">Mặc định lời dẫn dày, giọng Gen Z, hook gợi tò mò và dùng slang có chọn lọc. Thêm meme mới hoặc từ khóa muốn ưu tiên ở trên; AI dùng khi hợp ngữ cảnh. Muốn ít lời hoặc trang trọng, ghi rõ tại đây.</p>
 				<div className="flex items-center gap-2">
 					<Checkbox id="narration-captions" checked={narrationCaptions} disabled={isProcessing || isPreviewing} onCheckedChange={(checked) => setNarrationCaptions(checked === true)} />
 					<Label htmlFor="narration-captions" className="text-xs">Tạo kèm phụ đề</Label>

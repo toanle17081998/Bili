@@ -12,26 +12,50 @@ const storyAnalysis = {
 	throughline: "Từ các bộ phận rời đến một cây cầu hoàn chỉnh.",
 	tone: "Gần gũi, tò mò, hào hứng vừa phải.",
 	beats: [
-		{ frameIndex: 0, observation: "Các thanh nhỏ được ghép thành cầu.", storyRole: "Mở câu chuyện bằng sự tò mò." },
-		{ frameIndex: 1, observation: "Cây cầu đã được lắp hoàn chỉnh.", storyRole: "Chốt bằng thành quả nhìn thấy." },
+		{
+			frameIndex: 0,
+			observation: "Các thanh nhỏ được ghép thành cầu.",
+			storyRole: "Mở câu chuyện bằng sự tò mò.",
+		},
+		{
+			frameIndex: 1,
+			observation: "Cây cầu đã được lắp hoàn chỉnh.",
+			storyRole: "Chốt bằng thành quả nhìn thấy.",
+		},
 	],
 	uncertainties: ["Không thấy thử tải nên không khẳng định độ bền."],
 };
 
-function providerResponse({ provider, payload }: { provider: string; payload: unknown }) {
+function providerResponse({
+	provider,
+	payload,
+}: {
+	provider: string;
+	payload: unknown;
+}) {
 	const text = JSON.stringify(payload);
-	return Response.json(provider === "gemini"
-		? { candidates: [{ content: { parts: [{ text }] } }] }
-		: { choices: [{ message: { content: text } }] });
+	return Response.json(
+		provider === "gemini"
+			? { candidates: [{ content: { parts: [{ text }] } }] }
+			: { choices: [{ message: { content: text } }] },
+	);
 }
 
 test("Rust bounds image sampling and rejects overlapping, empty or excessive narration", async () => {
 	const policy = await loadDubbingTiming();
-	assert.ok(policy.narration_output_tokens(600) > policy.narration_output_tokens(8));
+	assert.equal(policy.narration_max_duration(), 3600);
+	assert.ok(
+		policy.narration_output_tokens(600) > policy.narration_output_tokens(8),
+	);
 	assert.ok(policy.narration_output_tokens(600) <= 16384);
-	for (const duration of [0.5, 8, 60, 600]) {
+	assert.equal(policy.narration_output_tokens(3600), 16384);
+	for (const phase of [0, 1, 2]) {
+		assert.ok(policy.narration_stage_timeout_ms(600, phase) >= 180000);
+		assert.ok(policy.narration_stage_timeout_ms(3600, phase) <= 600000);
+	}
+	for (const duration of [0.5, 8, 60, 600, 601, 1200, 3600]) {
 		const count = policy.narration_frame_count(duration);
-		assert.ok(count > 0 && count <= 72);
+		assert.ok(count > 0 && count <= 32);
 		let previous = -1;
 		for (let i = 0; i < count; i++) {
 			const time = policy.narration_frame_time(duration, i);
@@ -40,7 +64,7 @@ test("Rust bounds image sampling and rejects overlapping, empty or excessive nar
 		}
 		assert.ok(Number.isNaN(policy.narration_frame_time(duration, count)));
 	}
-	for (const duration of [0, -1, NaN, Infinity, 601])
+	for (const duration of [0, -1, NaN, Infinity, 3600.001, 3601])
 		assert.equal(policy.narration_frame_count(duration), 0);
 	const cue = {
 		id: "one",
@@ -49,8 +73,32 @@ test("Rust bounds image sampling and rejects overlapping, empty or excessive nar
 		text: "A person builds a small bridge.",
 	};
 	await validateNarrationScript({ segments: [cue], duration: 8 });
+	await validateNarrationScript({
+		segments: [
+			{
+				id: "dense-hook",
+				start: 0,
+				end: 6,
+				text: "Ê khoan, mấy thanh nhỏ ghép lại mà cuốn thật. Nhìn cách nối từng phần, cái hay nằm ở sự tỉ mỉ.",
+			},
+			{
+				id: "dense-payoff",
+				start: 6.2,
+				end: 8,
+				text: "Thành hình rồi, nhìn có gu đấy!",
+			},
+		],
+		duration: 8,
+	});
+	await validateNarrationScript({
+		segments: [{ ...cue, start: 3596, end: 3600 }],
+		duration: 3600,
+	});
 	await assert.rejects(
-		validateNarrationScript({ segments: [{ ...cue, text: "x".repeat(10000) }], duration: 8 }),
+		validateNarrationScript({
+			segments: [{ ...cue, text: "x".repeat(10000) }],
+			duration: 8,
+		}),
 		/giới hạn/,
 	);
 	await assert.rejects(
@@ -72,7 +120,9 @@ test("Rust bounds image sampling and rejects overlapping, empty or excessive nar
 		[{ ...cue, text: "word ".repeat(17) }],
 		[cue, { ...cue, id: "two", start: 3, end: 6 }],
 	])
-		await assert.rejects(validateNarrationScript({ segments: cues, duration: 8 }));
+		await assert.rejects(
+			validateNarrationScript({ segments: cues, duration: 8 }),
+		);
 });
 
 test("silent video analyzes the whole story before writing narration with either provider", async () => {
@@ -130,18 +180,40 @@ test("silent video analyzes the whole story before writing narration with either
 						part.inlineData || part.image_url,
 				);
 				if (calls === 2) {
-					assert.equal(images.length, 0, "writing uses grounded story analysis, not frame-by-frame captioning");
+					assert.equal(
+						images.length,
+						0,
+						"writing uses grounded story analysis, not frame-by-frame captioning",
+					);
 					assert.match(parts[0].text, /"throughline":"Từ các bộ phận rời/);
 					assert.match(parts[0].text, /"time":2/);
 					assert.match(parts[0].text, /"time":6/);
 					assert.match(parts[0].text, /Không thấy thử tải/);
 					assert.match(parts[0].text, /KHÔNG PHẢI.*mô tả/);
-					return providerResponse({ provider, payload: {
-						segments: [
-							{ start: 0, end: 4, text: "Vài thanh nhỏ thôi, ghép lại sẽ ra sao?" },
-							{ start: 5, end: 8, text: "Thành hình rồi, nhìn cũng ra gì đấy!" },
-						],
-					} });
+					assert.match(parts[0].text, /PHONG CÁCH MẶC ĐỊNH — GEN Z/);
+					assert.match(parts[0].text, /85-95%/);
+					assert.match(parts[0].text, /KHÔNG quá 4 từ mỗi giây/);
+					assert.match(
+						parts[0].text,
+						/không phải bảng xếp hạng trend trực tiếp/,
+					);
+					return providerResponse({
+						provider,
+						payload: {
+							segments: [
+								{
+									start: 0,
+									end: 4,
+									text: "Vài thanh nhỏ thôi, ghép lại sẽ ra sao?",
+								},
+								{
+									start: 5,
+									end: 8,
+									text: "Thành hình rồi, nhìn cũng ra gì đấy!",
+								},
+							],
+						},
+					});
 				}
 				assert.equal(calls, 1);
 				assert.match(parts[0].text, /PHÂN TÍCH MẠCH CHUYỆN/);
@@ -159,6 +231,7 @@ test("silent video analyzes the whole story before writing narration with either
 				return providerResponse({ provider, payload: storyAnalysis });
 			};
 			const preview = await generateNarrationPreview({
+				reuseAnalysis: false,
 				videoPath,
 				workDir: directory,
 				notes: "Bridge demonstration",
@@ -166,18 +239,32 @@ test("silent video analyzes the whole story before writing narration with either
 			});
 			assert.equal(calls, 2);
 			assert.equal(preview.subtitles.length, 2);
-			assert.equal(preview.subtitles[1].start, 5, "the pause between story beats is preserved");
+			assert.equal(
+				preview.subtitles[1].start,
+				5,
+				"the pause between story beats is preserved",
+			);
 			assert.equal(preview.duration, 8);
 			assert.deepEqual(await fs.readdir(directory), ["silent.mp4"]);
 		}
 		for (const response of [
 			new Response(null, { status: 429 }),
 			Response.json({ choices: [{ message: { content: "invalid json" } }] }),
-			providerResponse({ provider: "openai", payload: { ...storyAnalysis, beats: [] } }),
-			providerResponse({ provider: "openai", payload: { ...storyAnalysis, beats: [{ ...storyAnalysis.beats[0], frameIndex: 99 }] } }),
+			providerResponse({
+				provider: "openai",
+				payload: { ...storyAnalysis, beats: [] },
+			}),
+			providerResponse({
+				provider: "openai",
+				payload: {
+					...storyAnalysis,
+					beats: [{ ...storyAnalysis.beats[0], frameIndex: 99 }],
+				},
+			}),
 		]) {
 			await assert.rejects(
 				generateNarrationPreview({
+					reuseAnalysis: false,
 					videoPath,
 					workDir: directory,
 					fetchImpl: async () => response,
@@ -188,26 +275,40 @@ test("silent video analyzes the whole story before writing narration with either
 		for (const response of [
 			new Response(null, { status: 429 }),
 			providerResponse({ provider: "openai", payload: { segments: [] } }),
-			providerResponse({ provider: "openai", payload: { segments: [{ start: 0, end: 9, text: "Too late." }] } }),
+			providerResponse({
+				provider: "openai",
+				payload: { segments: [{ start: 0, end: 9, text: "Too late." }] },
+			}),
 		]) {
 			let calls = 0;
-			await assert.rejects(generateNarrationPreview({
-				videoPath,
-				workDir: directory,
-				fetchImpl: async () => ++calls === 1 ? providerResponse({ provider: "openai", payload: storyAnalysis }) : response,
-			}));
+			await assert.rejects(
+				generateNarrationPreview({
+					reuseAnalysis: false,
+					videoPath,
+					workDir: directory,
+					fetchImpl: async () =>
+						++calls === 1
+							? providerResponse({ provider: "openai", payload: storyAnalysis })
+							: response,
+				}),
+			);
 			assert.equal(calls, 2);
 			assert.deepEqual(await fs.readdir(directory), ["silent.mp4"]);
 		}
 		let fractionalCalls = 0;
 		const fractional = await generateNarrationPreview({
+			reuseAnalysis: false,
 			videoPath,
 			workDir: directory,
 			duration: 7.8,
 			fetchImpl: async (_url, init) => {
 				const body = JSON.parse(String(init?.body));
 				assert.match(body.messages[0].content[0].text, /"duration":7.8/);
-				if (++fractionalCalls === 1) return providerResponse({ provider: "openai", payload: storyAnalysis });
+				if (++fractionalCalls === 1)
+					return providerResponse({
+						provider: "openai",
+						payload: storyAnalysis,
+					});
 				return Response.json({
 					choices: [
 						{
@@ -225,6 +326,71 @@ test("silent video analyzes the whole story before writing narration with either
 		});
 		assert.equal(fractional.duration, 7.8);
 		assert.equal(fractionalCalls, 2);
+		let timeoutCalls = 0;
+		let analysisSignal: AbortSignal | undefined;
+		await assert.rejects(
+			generateNarrationPreview({
+				videoPath,
+				workDir: directory,
+				notes: "cached-timeout-retry",
+				fetchImpl: async (_url, init) => {
+					if (++timeoutCalls === 1) {
+						analysisSignal = init?.signal ?? undefined;
+						return providerResponse({
+							provider: "openai",
+							payload: storyAnalysis,
+						});
+					}
+					assert.notEqual(
+						init?.signal,
+						analysisSignal,
+						"writing has a fresh deadline independent of analysis",
+					);
+					throw new DOMException("Timed out", "TimeoutError");
+				},
+			}),
+			(error: unknown) =>
+				error instanceof Error &&
+				"status" in error &&
+				error.status === 504 &&
+				/viết lời/.test(error.message),
+		);
+		assert.equal(timeoutCalls, 2);
+		let retryCalls = 0;
+		const resumed = await generateNarrationPreview({
+			videoPath,
+			workDir: directory,
+			notes: "cached-timeout-retry",
+			fetchImpl: async (_url, init) => {
+				retryCalls++;
+				const body = JSON.parse(String(init?.body));
+				assert.match(body.messages[0].content[0].text, /"throughline"/);
+				assert.equal(
+					body.messages[0].content.filter(
+						(part: { type: string }) => part.type === "image_url",
+					).length,
+					0,
+				);
+				return providerResponse({
+					provider: "openai",
+					payload: {
+						segments: [
+							{
+								start: 0,
+								end: 8,
+								text: "Nhìn mô hình thành hình, đúng là có gu.",
+							},
+						],
+					},
+				});
+			},
+		});
+		assert.equal(
+			retryCalls,
+			1,
+			"retry reuses analysis instead of billing another vision pass",
+		);
+		assert.equal(resumed.subtitles.length, 1);
 	} finally {
 		for (const key of keys) {
 			if (saved[key] === undefined) delete process.env[key];

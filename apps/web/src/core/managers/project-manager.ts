@@ -26,9 +26,16 @@ import {
 } from "@/services/storage/migrations";
 import { loadFonts } from "@/fonts/google-fonts";
 import { DEFAULTS } from "@/timeline/defaults";
-import { getElementFontFamilies } from "@/timeline/element-utils";
-import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
+import {
+	buildElementFromMedia,
+	getElementFontFamilies,
+} from "@/timeline/element-utils";
+import {
+	floatToFrameRate,
+	getRaisedProjectFpsForImportedMedia,
+} from "@/fps/utils";
 import type { MediaAsset } from "@/media/types";
+import { mediaTimeFromSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 
 export interface MigrationState {
 	isMigrating: boolean;
@@ -79,13 +86,13 @@ export class ProjectManager {
 		await this.storageMigrationPromise;
 	}
 
-	async createNewProject({
+	private buildNewProject({
 		id,
 		name,
 	}: {
 		id?: string;
 		name: string;
-	}): Promise<string> {
+	}): TProject {
 		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
 		const newProject: TProject = {
 			metadata: {
@@ -110,6 +117,14 @@ export class ProjectManager {
 			},
 			version: CURRENT_PROJECT_VERSION,
 		};
+		return newProject;
+	}
+
+	async createNewProject({
+		id,
+		name,
+	}: { id?: string; name: string }): Promise<string> {
+		const newProject = this.buildNewProject({ id, name });
 
 		this.active = newProject;
 		this.notify();
@@ -127,6 +142,53 @@ export class ProjectManager {
 			return newProject.metadata.id;
 		} catch (error) {
 			toast.error("Failed to save new project");
+			throw error;
+		}
+	}
+
+	// Persist a detached project without replacing the editor's active project or undo history.
+	async createProjectFromVideo({
+		id,
+		name,
+		asset,
+	}: { id?: string; name: string; asset: MediaAsset }): Promise<string> {
+		const project = this.buildNewProject({ id, name });
+		const duration = mediaTimeFromSeconds({ seconds: asset.duration ?? 0 });
+		const element = buildElementFromMedia({
+			mediaId: asset.id,
+			mediaType: "video",
+			name: asset.name,
+			duration,
+			startTime: ZERO_MEDIA_TIME,
+		});
+		if (element.type !== "video") throw new Error("Expected a video element");
+		project.scenes[0].tracks.main.elements = [{ ...element, id: generateUUID() }];
+		project.metadata.duration = duration;
+		project.metadata.thumbnail = asset.thumbnailUrl;
+		if (asset.width && asset.height) {
+			const canvasSize = { width: asset.width, height: asset.height };
+			project.settings = {
+				...project.settings,
+				canvasSize,
+				originalCanvasSize: canvasSize,
+				lastCustomCanvasSize: canvasSize,
+				canvasSizeMode: "custom",
+			};
+		}
+		if (asset.fps) project.settings.fps = floatToFrameRate(asset.fps);
+		try {
+			await storageService.saveMediaAsset({
+				projectId: project.metadata.id,
+				mediaAsset: asset,
+			});
+			await storageService.saveProject({ project });
+			this.updateMetadata(project);
+			return project.metadata.id;
+		} catch (error) {
+			await Promise.allSettled([
+				storageService.deleteProjectMedia({ projectId: project.metadata.id }),
+				storageService.deleteProject({ id: project.metadata.id }),
+			]);
 			throw error;
 		}
 	}

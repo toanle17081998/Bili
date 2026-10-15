@@ -26,8 +26,8 @@ export class IndexedDBAdapter<T> implements StorageAdapter<T> {
 			request.onerror = () => reject(request.error);
 			request.onsuccess = () => resolve(request.result);
 
-			request.onupgradeneeded = (event) => {
-				const db = (event.target as IDBOpenDBRequest).result;
+			request.onupgradeneeded = () => {
+				const db = request.result;
 				if (!db.objectStoreNames.contains(this.storeName)) {
 					db.createObjectStore(this.storeName, { keyPath: "id" });
 				}
@@ -47,34 +47,42 @@ export class IndexedDBAdapter<T> implements StorageAdapter<T> {
 		});
 	}
 
-	async set({
-		key,
-		value,
-	}: {
-		key: string;
-		value: T;
-	}): Promise<void> {
-		const db = await this.getDB();
-		const transaction = db.transaction([this.storeName], "readwrite");
-		const store = transaction.objectStore(this.storeName);
-
-		return new Promise((resolve, reject) => {
-			const request = store.put({ id: key, ...value });
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve();
+	async set({ key, value }: { key: string; value: T }): Promise<void> {
+		await this.write({
+			operation: (store) => store.put({ id: key, ...value }),
 		});
 	}
 
-	async remove(key: string): Promise<void> {
+	private async write({
+		operation,
+	}: {
+		operation: (store: IDBObjectStore) => IDBRequest;
+	}): Promise<void> {
 		const db = await this.getDB();
-		const transaction = db.transaction([this.storeName], "readwrite");
-		const store = transaction.objectStore(this.storeName);
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const transaction = db.transaction([this.storeName], "readwrite");
+				let requestError: DOMException | null = null;
+				transaction.oncomplete = () =>
+					requestError ? reject(requestError) : resolve();
+				transaction.onabort = () =>
+					reject(
+						transaction.error ??
+							requestError ??
+							new DOMException("IndexedDB transaction aborted", "AbortError"),
+					);
+				const request = operation(transaction.objectStore(this.storeName));
+				request.onerror = () => {
+					requestError = request.error;
+				};
+			});
+		} finally {
+			db.close();
+		}
+	}
 
-		return new Promise((resolve, reject) => {
-			const request = store.delete(key);
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve();
-		});
+	async remove(key: string): Promise<void> {
+		await this.write({ operation: (store) => store.delete(key) });
 	}
 
 	async list(): Promise<string[]> {
@@ -102,15 +110,7 @@ export class IndexedDBAdapter<T> implements StorageAdapter<T> {
 	}
 
 	async clear(): Promise<void> {
-		const db = await this.getDB();
-		const transaction = db.transaction([this.storeName], "readwrite");
-		const store = transaction.objectStore(this.storeName);
-
-		return new Promise((resolve, reject) => {
-			const request = store.clear();
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve();
-		});
+		await this.write({ operation: (store) => store.clear() });
 	}
 }
 

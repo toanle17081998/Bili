@@ -2,6 +2,11 @@
 
 pub const MAX_REGIONS: usize = 16;
 
+#[unsafe(no_mangle)]
+pub extern "C" fn video_upload_max_bytes() -> u32 {
+    1024 * 1024 * 1024
+}
+
 #[derive(Clone, Copy)]
 pub struct VideoInfo {
     pub width: f64,

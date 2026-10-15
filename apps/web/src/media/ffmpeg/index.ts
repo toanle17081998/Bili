@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs/promises";
 import { existsSync, statSync } from "fs";
+import { FFmpegProgressReader, type FFmpegProgress } from "./progress";
 
 export interface VideoProbeResult {
 	duration: number; // in seconds
@@ -9,6 +10,9 @@ export interface VideoProbeResult {
 	height: number;
 	fps: number;
 	hasAudio: boolean;
+	hasVideo?: boolean;
+	videoDuration?: number;
+	videoFrameCount?: number;
 	audioCodecs?: string[];
 	bitrate?: number;
 }
@@ -50,7 +54,7 @@ export class FFmpegService {
 	static async runCommand(
 		cmd: string,
 		args: string[],
-		options: { signal?: AbortSignal } = {},
+		options: { signal?: AbortSignal; onProgress?: (progress: FFmpegProgress) => void } = {},
 	): Promise<{ stdout: string; stderr: string }> {
 		const binary = this.getBinaryPath(cmd);
 		return new Promise((resolve, reject) => {
@@ -61,9 +65,11 @@ export class FFmpegService {
 			let stdout = "";
 			let stderr = "";
 			let commandError: Error | undefined;
+			const progressReader = new FFmpegProgressReader();
 
 			process.stdout.on("data", (data) => {
 				stdout += data.toString();
+				if (options.onProgress) progressReader.push({ chunk: data.toString(), onProgress: options.onProgress });
 			});
 
 			process.stderr.on("data", (data) => {
@@ -92,16 +98,20 @@ export class FFmpegService {
 	}
 
 	static async probeVideo(
-		input: string | { filePath: string; signal?: AbortSignal },
+		input: string | {
+			filePath: string;
+			signal?: AbortSignal;
+			frameRatePrecision?: "exact";
+		},
 	): Promise<VideoProbeResult> {
-		const { filePath, signal } =
+		const { filePath, signal, frameRatePrecision } =
 			typeof input === "string" ? { filePath: input } : input;
 		try {
 			const args = [
 				"-v",
 				"error",
 				"-show_entries",
-				"stream=width,height,r_frame_rate,codec_type,codec_name:stream_side_data=rotation:format=duration,bit_rate",
+				"stream=width,height,r_frame_rate,codec_type,codec_name,duration,nb_frames:stream_side_data=rotation:format=duration,bit_rate",
 				"-of",
 				"json",
 				filePath,
@@ -120,7 +130,9 @@ export class FFmpegService {
 			let fps = 30;
 			if (videoStream?.r_frame_rate) {
 				const [num, den] = videoStream.r_frame_rate.split("/").map(Number);
-				if (den && den > 0) fps = Math.round(num / den);
+				if (den && den > 0) {
+					fps = frameRatePrecision === "exact" ? num / den : Math.round(num / den);
+				}
 			}
 
 			const duration = parseFloat(data.format?.duration || "0");
@@ -139,6 +151,9 @@ export class FFmpegService {
 				height: (rotated ? videoStream?.width : videoStream?.height) || 1920,
 				fps,
 				hasAudio: !!audioStream,
+				hasVideo: !!videoStream,
+				videoDuration: Number(videoStream?.duration),
+				videoFrameCount: Number(videoStream?.nb_frames),
 				audioCodecs:
 					data.streams
 						?.filter(

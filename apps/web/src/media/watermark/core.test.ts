@@ -1,9 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planWatermarkFilters, WatermarkValidationError } from "./core";
+import {
+	getVideoUploadMaxBytes,
+	planWatermarkFilters,
+	WatermarkValidationError,
+} from "./core";
 import type { WatermarkRegion } from "./types";
 
 const video = { width: 160, height: 96, duration: 2 };
+
+test("Rust allows video uploads up to 1 GiB", async () => {
+	assert.equal(await getVideoUploadMaxBytes(), 1024 * 1024 * 1024);
+});
 const region: WatermarkRegion = {
 	x: 108,
 	y: 10,

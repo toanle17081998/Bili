@@ -19,6 +19,7 @@ import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
 import type { ExportFormat, ExportQuality } from "@/export";
 import { CanvasRenderer } from "./canvas-renderer";
+import { getCompatibleCanvasEncoding } from "./video-encoding";
 
 type ExportParams = {
 	width: number;
@@ -94,15 +95,25 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		const outputFormat =
 			this.format === "webm" ? new WebMOutputFormat() : new Mp4OutputFormat();
 
+		const canvas = this.renderer.getOutputCanvas();
+		const videoEncoding = await getCompatibleCanvasEncoding({
+			canvas,
+			encoding: {
+				codec: this.format === "webm" ? "vp9" : "avc",
+				bitrate: qualityMap[this.quality],
+			},
+			frameRate: fpsFloat,
+		});
+		if (this.isCancelled) {
+			this.emit("cancelled");
+			return null;
+		}
+
 		const output = new Output({
 			format: outputFormat,
 			target: new BufferTarget(),
 		});
-
-		const videoSource = new CanvasSource(this.renderer.getOutputCanvas(), {
-			codec: this.format === "webm" ? "vp9" : "avc",
-			bitrate: qualityMap[this.quality],
-		});
+		const videoSource = new CanvasSource(canvas, videoEncoding);
 
 		output.addVideoTrack(videoSource, { frameRate: fpsFloat });
 

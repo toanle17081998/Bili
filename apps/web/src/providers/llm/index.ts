@@ -92,11 +92,11 @@ export class OpenAILLMProvider implements LLMProvider {
 						model,
 						messages: [{ role: "user", content: await translationPrompt({ inputs, context }) }],
 						response_format: { type: "json_object" },
-						...(/^(gpt-5|o[134])/.test(model)
+						...(/^(gpt-[5-9]|o[1-9])/.test(model)
 							? { max_completion_tokens: policy.translation_llm_output_tokens() }
 							: { max_tokens: policy.translation_llm_output_tokens() }),
 					}),
-					signal: AbortSignal.timeout(90_000),
+					signal: AbortSignal.timeout(180_000),
 				});
 				await checkResponse({ response, provider: "OpenAI-compatible LLM" });
 				let data;

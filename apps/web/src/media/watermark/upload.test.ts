@@ -40,7 +40,7 @@ test("upload bounds chunked requests without Content-Length and cancels ingestio
 			maxBytes: 60,
 			signal: new AbortController().signal,
 		}),
-		UploadLimitError,
+		{ name: "Error", message: "Video vượt quá 1 GB." },
 	);
 	assert.equal(cancelled, true);
 });

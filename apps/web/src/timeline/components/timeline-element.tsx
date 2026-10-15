@@ -5,6 +5,7 @@ import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
+import { VideoFilmstrip } from "./video-filmstrip";
 import { useElementPreview } from "@/timeline/hooks/use-element-preview";
 import {
 	useKeyframeDrag,
@@ -1091,12 +1092,10 @@ function TiledMediaContent({
 	const mediaAssets = useEditor((e) => e.media.getAssets());
 
 	const mediaAsset = mediaAssets.find((asset) => asset.id === element.mediaId);
-	const imageUrl =
-		element.type === "video"
-			? mediaAsset?.thumbnailUrl
-			: (mediaAsset?.thumbnailUrl ?? mediaAsset?.url);
+	const pixelsPerSecond = useContext(PixelsPerSecondContext);
+	const imageUrl = mediaAsset?.thumbnailUrl ?? mediaAsset?.url;
 
-	if (!imageUrl) {
+	if (!mediaAsset || (element.type === "image" && !imageUrl)) {
 		return (
 			<span className="text-foreground/80 truncate text-xs">
 				{element.name}
@@ -1105,21 +1104,29 @@ function TiledMediaContent({
 	}
 
 	const trackHeight = getTrackHeight({ type: track.type });
-	const tileWidth = trackHeight * THUMBNAIL_ASPECT_RATIO;
 
 	return (
 		<>
-			<div
-				className="absolute inset-0"
-				style={{
-					backgroundColor: "var(--muted)",
-					backgroundImage: `url(${imageUrl})`,
-					backgroundRepeat: "repeat-x",
-					backgroundSize: `${tileWidth}px ${trackHeight}px`,
-					backgroundPosition: "left center",
-					pointerEvents: "none",
-				}}
-			/>
+			{element.type === "video" && pixelsPerSecond !== null ? (
+				<VideoFilmstrip
+					element={element}
+					mediaAsset={mediaAsset}
+					pixelsPerSecond={pixelsPerSecond}
+					height={trackHeight}
+				/>
+			) : (
+				<div
+					className="absolute inset-0"
+					style={{
+						backgroundColor: "var(--muted)",
+						backgroundImage: `url(${imageUrl})`,
+						backgroundRepeat: "repeat-x",
+						backgroundSize: `${trackHeight * THUMBNAIL_ASPECT_RATIO}px ${trackHeight}px`,
+						backgroundPosition: "left center",
+						pointerEvents: "none",
+					}}
+				/>
+			)}
 			<MediaElementHeader
 				name={mediaAsset?.name}
 				leading={

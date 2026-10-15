@@ -187,6 +187,53 @@ test("uploaded narration sources preserve selected trim, need reviewed scripts a
 	}
 });
 
+test("narration sources accept video longer than ten minutes", async () => {
+	const projectId = "long-narration-test-" + randomUUID();
+	const directory = path.resolve(process.cwd(), ".local_storage", "projects", projectId);
+	try {
+		await fs.mkdir(directory, { recursive: true });
+		const inputPath = path.join(directory, "long.mp4");
+		await FFmpegService.runCommand("ffmpeg", [
+			"-y", "-f", "lavfi", "-i",
+			"color=c=green:size=64x48:rate=1:duration=660",
+			"-an", "-c:v", "libx264", inputPath,
+		]);
+		const form = new FormData();
+		form.set("projectId", projectId);
+		form.set("start", "0");
+		form.set("duration", "660");
+		form.set("video", new File([await fs.readFile(inputPath)], "long.mp4", {
+			type: "video/mp4",
+		}));
+		const response = await uploadSource(new NextRequest("http://localhost/api/localization/sources", {
+			method: "POST",
+			body: form,
+		}));
+		const uploaded = await response.json();
+		assert.equal(response.status, 201, uploaded.error);
+		assert.equal(await readNarrationDuration(uploaded.videoPath), 660);
+		const probe = await FFmpegService.probeVideo(uploaded.videoPath);
+		assert.ok(Math.abs(probe.duration - 660) < 1);
+		assert.equal(probe.fps, 2);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("narration sources reject videos exceeding sixty minutes with the current policy message", async () => {
+	const form = new FormData();
+	form.set("projectId", "duration-limit-test");
+	form.set("start", "0");
+	form.set("duration", "3601");
+	form.set("video", new File(["video"], "source.mp4", { type: "video/mp4" }));
+	const response = await uploadSource(new NextRequest("http://localhost/api/localization/sources", {
+		method: "POST",
+		body: form,
+	}));
+	assert.equal(response.status, 422);
+	assert.equal((await response.json()).error, "Mỗi video thuyết minh tối đa 60 phút.");
+});
+
 test("narration source expiry leaves files leased by active analysis or synthesis untouched", async () => {
 	const root = path.resolve(
 		process.cwd(),
