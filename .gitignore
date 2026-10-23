@@ -29,4 +29,5 @@ rust-migration-notes.md
 apps/web/.local_storage/
 apps/web/Python/
 .local_tools/
+.local_storage
 
