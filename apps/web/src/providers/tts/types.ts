@@ -11,6 +11,7 @@ export interface TTSRequest {
 	voice?: string;
 	speed?: number;
 	outputPath: string;
+	signal?: AbortSignal;
 }
 
 export interface TTSResult {

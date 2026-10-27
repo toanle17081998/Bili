@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
 	productionBrowserSourceMaps: true,
 	output: "standalone",
 	outputFileTracingIncludes: {
+		"/api/localization/story": ["../../rust/crates/story-narrator/story-narrator.wasm", "../../rust/crates/localization/timing.wasm"],
 		"/api/source/split": ["../../rust/crates/split-video/split-video.wasm"],
 		"/api/source/split/core": ["../../rust/crates/split-video/split-video.wasm"],
 		"/api/localization/sources": [

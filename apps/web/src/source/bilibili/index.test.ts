@@ -54,7 +54,10 @@ test("a missing downloader produces an actionable import error", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "opencut-tools-"));
 	try {
 		await withToolEnv(
-			{ YTDLP_PATH: path.join(directory, "missing-yt-dlp") },
+			{
+				YTDLP_PATH: path.join(directory, "missing-yt-dlp"),
+				FFMPEG_PATH: path.join(directory, "missing-ffmpeg"),
+			},
 			async () => {
 				await assert.rejects(
 					new BilibiliProvider(directory).importVideo("BV18RHZ6TEeC"),
@@ -65,5 +68,45 @@ test("a missing downloader produces an actionable import error", async () => {
 	} finally {
 		assert.ok(directory.startsWith(path.join(os.tmpdir(), "opencut-tools-")));
 		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("metadata uses the Bilibili API without invoking yt-dlp", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async (input) => {
+		const url = new URL(String(input));
+		if (url.pathname.endsWith("/view")) {
+			return Response.json({
+				code: 0,
+				data: {
+					cid: 123,
+					title: "API video",
+					duration: 42,
+					pic: "http://example.com/cover.jpg",
+					owner: { name: "Creator" },
+				},
+			});
+		}
+		return Response.json({
+			code: 0,
+			data: {
+				dash: {
+					video: [{ baseUrl: "https://example.com/video.m4s", codecid: 7 }],
+					audio: [{ baseUrl: "https://example.com/audio.m4s" }],
+				},
+			},
+		});
+	}) as typeof fetch;
+
+	try {
+		await withToolEnv({ YTDLP_PATH: "missing-yt-dlp" }, async () => {
+			const metadata = await new BilibiliProvider().getMetadata("BV18kJD6LEEn");
+			assert.equal(metadata.title, "API video");
+			assert.equal(metadata.duration, 42);
+			assert.equal(metadata.thumbnail, "https://example.com/cover.jpg");
+			assert.equal(metadata.uploader, "Creator");
+		});
+	} finally {
+		globalThis.fetch = originalFetch;
 	}
 });

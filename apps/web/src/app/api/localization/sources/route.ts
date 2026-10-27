@@ -21,6 +21,7 @@ const inputSchema = z.object({
 	projectId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 	start: z.coerce.number().nonnegative(),
 	duration: z.coerce.number().positive(),
+	purpose: z.enum(["narration", "story"]).default("narration"),
 });
 let activeUploads = 0;
 
@@ -55,6 +56,7 @@ export async function POST(request: NextRequest) {
 			projectId: form.get("projectId"),
 			start: form.get("start"),
 			duration: form.get("duration"),
+			purpose: form.get("purpose") || undefined,
 		});
 		const file = form.get("video");
 		if (file instanceof File && file.size > maxBytes)
@@ -68,7 +70,7 @@ export async function POST(request: NextRequest) {
 				"Video hoặc khoảng thời gian không hợp lệ.",
 				400,
 			);
-		const { projectId, start, duration } = parsed.data;
+		const { projectId, start, duration, purpose } = parsed.data;
 		const policy = await loadDubbingTiming();
 		if (!policy.narration_frame_count(duration))
 			throw new NarrationError(
@@ -95,6 +97,14 @@ export async function POST(request: NextRequest) {
 			);
 		if (start + duration > probe.duration + 0.1)
 			throw new NarrationError("Khoảng thời gian nằm ngoài video gốc.");
+		// Story analysis and export need the selected clip's original sound and motion.
+		// Keep the existing lightweight, silent narration workflow as its default.
+		const originalPath = path.join(directory, "original.mp4");
+		if (purpose === "story") {
+			await FFmpegService.runCommand("ffmpeg", ["-y", "-ss", String(start), "-i", input,
+				"-t", String(duration), "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264",
+				"-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", originalPath], { signal });
+		}
 		await FFmpegService.runCommand(
 			"ffmpeg",
 			[
@@ -107,9 +117,9 @@ export async function POST(request: NextRequest) {
 				String(duration),
 				"-map",
 				"0:v:0",
-				"-an",
+				...(purpose === "story" ? ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "96k"] : ["-an"]),
 				"-vf",
-				`scale=${policy.narration_proxy_size()}:${policy.narration_proxy_size()}:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=${policy.narration_proxy_fps()}`,
+				`scale=${policy.narration_proxy_size()}:${policy.narration_proxy_size()}:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=${purpose === "story" ? 8 : policy.narration_proxy_fps()}`,
 				"-threads",
 				"2",
 				"-filter_threads",
@@ -134,7 +144,7 @@ export async function POST(request: NextRequest) {
 		await fs.unlink(input);
 		await fs.writeFile(
 			path.join(directory, "source.json"),
-			JSON.stringify({ duration }),
+			JSON.stringify({ duration, ...(purpose === "story" ? { originalPath } : {}) }),
 		);
 		await scheduleNarrationSourceCleanup(root);
 		return NextResponse.json(

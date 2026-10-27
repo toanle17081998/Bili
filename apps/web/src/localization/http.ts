@@ -2,9 +2,10 @@ import { NarrationError } from "./narration";
 import { loadDubbingTiming } from "./timing";
 
 export async function readLocalizationRequest(
-	request: Request,
+	input: Request | { request: Request; maxBytes: number },
 ): Promise<unknown> {
-	const limit = (await loadDubbingTiming()).narration_request_max_bytes();
+	const request = input instanceof Request ? input : input.request;
+	const limit = input instanceof Request ? (await loadDubbingTiming()).narration_request_max_bytes() : input.maxBytes;
 	if (Number(request.headers.get("content-length")) > limit)
 		throw new NarrationError("Yêu cầu vượt quá giới hạn nội dung.", 413);
 	if (!request.body) throw new NarrationError("Yêu cầu trống.", 400);

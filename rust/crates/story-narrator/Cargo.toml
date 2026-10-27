@@ -1,0 +1,10 @@
+[package]
+name = "story-narrator"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+serde_json = "1"

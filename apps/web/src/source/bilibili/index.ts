@@ -10,6 +10,49 @@ import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
 
+const BILIBILI_HEADERS = {
+	Referer: "https://www.bilibili.com/",
+};
+
+interface BilibiliStream {
+	baseUrl?: string;
+	base_url?: string;
+	url?: string;
+	codecid?: number;
+	codecs?: string;
+	height?: number;
+	bandwidth?: number;
+}
+
+interface VideoFormat {
+	url?: string;
+	vcodec?: string;
+	height?: number;
+	tbr?: number;
+}
+
+interface BilibiliViewResponse {
+	code: number;
+	message?: string;
+	data?: {
+		cid?: number;
+		title?: string;
+		duration?: number;
+		pic?: string;
+		owner?: { name?: string };
+	};
+}
+
+interface BilibiliPlayResponse {
+	code: number;
+	message?: string;
+	data?: {
+		quality?: number;
+		dash?: { video?: BilibiliStream[]; audio?: BilibiliStream[] };
+		durl?: BilibiliStream[];
+	};
+}
+
 export class BilibiliProvider implements VideoSourceProvider {
 	readonly name = "bilibili";
 	private downloadDir: string;
@@ -168,9 +211,80 @@ export class BilibiliProvider implements VideoSourceProvider {
 		});
 	}
 
-	private async fetchVideoDetails(
+	private async fetchApiVideoDetails(
 		id: string,
-	): Promise<{ meta: VideoMetadata; formats: any[] }> {
+	): Promise<{ meta: VideoMetadata; formats: VideoFormat[] }> {
+		const viewUrl = new URL("https://api.bilibili.com/x/web-interface/view");
+		viewUrl.searchParams.set("bvid", id);
+		const viewResponse = await fetch(viewUrl, { headers: BILIBILI_HEADERS });
+		if (!viewResponse.ok) {
+			throw new Error(`Bilibili view API returned ${viewResponse.status}`);
+		}
+
+		const view: BilibiliViewResponse = await viewResponse.json();
+		if (view.code !== 0 || !view.data?.cid) {
+			throw new Error(view.message || "Bilibili view API returned no video");
+		}
+
+		const playUrl = new URL("https://api.bilibili.com/x/player/playurl");
+		playUrl.searchParams.set("bvid", id);
+		playUrl.searchParams.set("cid", String(view.data.cid));
+		playUrl.searchParams.set("qn", "80");
+		playUrl.searchParams.set("fnval", "4048");
+		playUrl.searchParams.set("fourk", "1");
+		const playResponse = await fetch(playUrl, { headers: BILIBILI_HEADERS });
+		if (!playResponse.ok) {
+			throw new Error(`Bilibili play API returned ${playResponse.status}`);
+		}
+
+		const play: BilibiliPlayResponse = await playResponse.json();
+		if (play.code !== 0 || !play.data) {
+			throw new Error(play.message || "Bilibili play API returned no stream");
+		}
+
+		const streamUrl = (stream: BilibiliStream) =>
+			stream?.baseUrl || stream?.base_url || stream?.url;
+		const formats = [
+			...(play.data.dash?.video || []).map((stream) => ({
+				url: streamUrl(stream),
+				vcodec:
+					stream.codecid === 7
+						? "avc1"
+						: stream.codecs || String(stream.codecid),
+				height: stream.height,
+				tbr: stream.bandwidth ? stream.bandwidth / 1000 : 0,
+			})),
+			...(play.data.dash?.audio || []).map((stream) => ({
+				url: streamUrl(stream),
+				vcodec: "none",
+				tbr: stream.bandwidth ? stream.bandwidth / 1000 : 0,
+			})),
+			...(play.data.durl || []).map((stream) => ({
+				url: streamUrl(stream),
+				vcodec: "avc1",
+				height: play.data.quality || 0,
+			})),
+		].filter((format) => format.url);
+
+		if (!formats.length)
+			throw new Error("Bilibili play API returned no stream URL");
+
+		return {
+			meta: {
+				id,
+				title: view.data.title || id,
+				duration: Math.round(view.data.duration || 60),
+				thumbnail: (view.data.pic || "").replace("http://", "https://"),
+				uploader: view.data.owner?.name || "Bilibili Creator",
+				url: `https://www.bilibili.com/video/${id}`,
+			},
+			formats,
+		};
+	}
+
+	private async fetchYtdlpVideoDetails(
+		id: string,
+	): Promise<{ meta: VideoMetadata; formats: VideoFormat[] }> {
 		const jsonOutput = await new Promise<string>((resolve, reject) => {
 			const proc = spawn(this.ytdlpPath, [
 				"-j",
@@ -208,12 +322,23 @@ export class BilibiliProvider implements VideoSourceProvider {
 		};
 	}
 
+	private async fetchVideoDetails(
+		id: string,
+	): Promise<{ meta: VideoMetadata; formats: VideoFormat[] }> {
+		try {
+			return await this.fetchApiVideoDetails(id);
+		} catch (apiError) {
+			console.warn("Bilibili API failed, falling back to yt-dlp:", apiError);
+			return this.fetchYtdlpVideoDetails(id);
+		}
+	}
+
 	async getMetadata(id: string): Promise<VideoMetadata> {
 		try {
 			const details = await this.fetchVideoDetails(id);
 			return details.meta;
 		} catch (err) {
-			console.warn("yt-dlp metadata failed, using fallback:", err);
+			console.warn("Bilibili metadata lookup failed, using fallback:", err);
 			return {
 				id,
 				title: `Video Bilibili ${id}`,
@@ -241,7 +366,7 @@ export class BilibiliProvider implements VideoSourceProvider {
 		const targetFile = path.join(this.downloadDir, `${id}.full.mp4`);
 
 		let meta: VideoMetadata;
-		let formats: any[] = [];
+		let formats: VideoFormat[] = [];
 		try {
 			const details = await this.fetchVideoDetails(id);
 			meta = details.meta;
@@ -276,22 +401,22 @@ export class BilibiliProvider implements VideoSourceProvider {
 			// 1. Try fast and reliable direct FFmpeg stream muxing with Bilibili mirror CDN
 			if (formats.length > 0) {
 				const videos = formats.filter(
-					(f: any) => f.vcodec && f.vcodec !== "none" && f.url,
+					(f) => f.vcodec && f.vcodec !== "none" && f.url,
 				);
 				const audios = formats.filter(
-					(f: any) => (!f.vcodec || f.vcodec === "none") && f.url,
+					(f) => (!f.vcodec || f.vcodec === "none") && f.url,
 				);
 				const avcVideos = videos.filter(
-					(f: any) => f.vcodec && f.vcodec.toLowerCase().startsWith("avc"),
+					(f) => f.vcodec && f.vcodec.toLowerCase().startsWith("avc"),
 				);
 				const candidateVideos = avcVideos.length ? avcVideos : videos;
 				candidateVideos.sort(
-					(a: any, b: any) =>
+					(a, b) =>
 						(b.height || 0) * 100000 +
 						(b.tbr || 0) -
 						((a.height || 0) * 100000 + (a.tbr || 0)),
 				);
-				audios.sort((a: any, b: any) => (b.tbr || 0) - (a.tbr || 0));
+				audios.sort((a, b) => (b.tbr || 0) - (a.tbr || 0));
 
 				const bestVideo = candidateVideos[0];
 				const bestAudio = audios[0];

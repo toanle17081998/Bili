@@ -12,6 +12,7 @@
     "build:watermark": "node scripts/build-watermark.mjs",
     "build:split-video": "node scripts/build-split-video.mjs",
     "build:social-copy": "node scripts/build-social-copy.mjs",
+    "build:story-narrator": "node scripts/build-story-narrator.mjs",
     "build:web": "turbo run build --filter=@opencut/web",
     "deploy:web": "turbo run deploy --filter=@opencut/web",
     "dev:tools": "turbo run dev --filter=@opencut/tools",

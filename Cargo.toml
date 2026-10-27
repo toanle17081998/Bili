@@ -5,6 +5,7 @@ members = [
     "rust/crates/time",
     "rust/crates/watermark",
     "rust/crates/localization",
+    "rust/crates/story-narrator",
     "rust/crates/split-video",
     "rust/crates/bridge",
     "rust/crates/effects",

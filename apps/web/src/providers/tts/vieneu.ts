@@ -91,6 +91,7 @@ export class VieNeuTTSProvider implements TTSProvider {
 	}
 
 	async generateSpeech(request: TTSRequest): Promise<TTSResult> {
+		request.signal?.throwIfAborted();
 		const text = request.text.trim();
 		if (!text) throw new SpeechProviderError({ provider: "VieNeu", status: 400 });
 
@@ -120,6 +121,7 @@ export class VieNeuTTSProvider implements TTSProvider {
 		}
 
 		for (let attempt = 0; ; attempt++) {
+			request.signal?.throwIfAborted();
 			let response: Response;
 			try {
 				response = await this.fetchImpl(this.endpoint, {
@@ -129,11 +131,13 @@ export class VieNeuTTSProvider implements TTSProvider {
 						"Content-Type": "application/json",
 					},
 					body,
-					signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+					signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 				});
 			} catch {
+				request.signal?.throwIfAborted();
 				if (attempt < MAX_RETRIES) {
-					await this.wait(BASE_RETRY_DELAY_MS * 2 ** attempt);
+					if (request.signal) await sleep(BASE_RETRY_DELAY_MS * 2 ** attempt, undefined, { signal: request.signal });
+					else await this.wait(BASE_RETRY_DELAY_MS * 2 ** attempt);
 					continue;
 				}
 				throw new SpeechProviderError({ provider: "VieNeu (server không chạy?)", status: 0 });
@@ -168,7 +172,8 @@ export class VieNeuTTSProvider implements TTSProvider {
 
 			if (response.status === 429 && attempt < MAX_RETRIES) {
 				const delay = Math.max(headerRetryAfter, BASE_RETRY_DELAY_MS * 2 ** attempt);
-				await this.wait(delay);
+				if (request.signal) await sleep(delay, undefined, { signal: request.signal });
+				else await this.wait(delay);
 				continue;
 			}
 

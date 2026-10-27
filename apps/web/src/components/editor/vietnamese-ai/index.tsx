@@ -35,6 +35,7 @@ import { VIENEU_PRESET_VOICES } from "@/providers/tts/voices";
 import type { TTSVoice } from "@/providers/tts/types";
 import { cn } from "@/utils/ui";
 import { BackgroundMusicSection } from "./background-music";
+import { StoryNarratorPanel } from "./story-narrator";
 
 interface Props {
 	projectId: string;
@@ -100,7 +101,7 @@ const SUBTITLE_BG_PRESETS = [
 
 export function VietnameseAiPanel({ projectId }: Props) {
 	const editor = useEditor();
-	const [mode, setMode] = useState<"dubbing" | "narration">("dubbing");
+	const [mode, setMode] = useState<"dubbing" | "narration" | "story">("dubbing");
 	const [narrationNotes, setNarrationNotes] = useState("");
 	const [narrationCaptions, setNarrationCaptions] = useState(true);
 	const narrationSource = useRef<{ signature: string; videoPath: string; timelineStart: number; elementId: string } | null>(null);
@@ -227,6 +228,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	const [existingLocalized, setExistingLocalized] = useState<any>(null);
 
 	useEffect(() => {
+		if (mode === "story") return;
 		let cancelled = false;
 		const checkExisting = async () => {
 			try {
@@ -842,18 +844,33 @@ export function VietnameseAiPanel({ projectId }: Props) {
 
 			<Tabs value={mode} onValueChange={(value) => {
 				if (isProcessing || isPreviewing) return;
-				setMode(value as "dubbing" | "narration");
+				setMode(value as "dubbing" | "narration" | "story");
 				setPreviewCues([]);
 				setHasPreviewed(false);
 				setExistingLocalized(null);
 				setProgressStep(null);
 				narrationDraftSignature.current = null;
 			}}>
-				<TabsList className="grid w-full grid-cols-2">
+				<TabsList className="grid w-full grid-cols-3">
 					<TabsTrigger value="dubbing" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><Languages className="size-3.5" />Lồng tiếng</TabsTrigger>
 					<TabsTrigger value="narration" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><ScanEye className="size-3.5" />Thuyết minh AI</TabsTrigger>
+					<TabsTrigger value="story" disabled={isProcessing || isPreviewing} className="text-xs">Story Narrator</TabsTrigger>
 				</TabsList>
 			</Tabs>
+			{mode === "story" ? <StoryNarratorPanel key={projectId} projectId={projectId} getSource={() => {
+				const source = getNarrationSelection();
+				return { file: source.asset.file, start: source.start, duration: source.duration, signature: source.signature, timelineStart: source.timelineStart, elementId: source.elementId };
+			}} onImportRender={async (project) => {
+				if (!project.render) throw new Error("Xuất video trước khi thêm vào thư viện.");
+				const response = await fetch(project.render.url);
+				if (!response.ok) throw new Error("Không tải được thành phẩm.");
+				const file = new File([await response.blob()], `lego-story-${projectId}.mp4`, { type: "video/mp4" });
+				const [processed] = await processMediaAssets({ files: [file] });
+				if (!processed) throw new Error("Không đọc được thành phẩm.");
+				const asset = await editor.media.addMediaAsset({ projectId, asset: processed });
+				if (!asset) throw new Error("Không lưu được thành phẩm vào thư viện.");
+				toast.success("Đã thêm thành phẩm vào thư viện. Kéo video vào timeline để tiếp tục chỉnh sửa.");
+			}} /> : <>
 			{mode === "narration" && <div className="flex flex-col gap-2">
 				<Label htmlFor="narration-notes" className="text-xs text-neutral-400">Ngữ cảnh, phong cách & từ khóa ưu tiên (tùy chọn)</Label>
 				<textarea id="narration-notes" aria-describedby="narration-notes-help" placeholder="Ví dụ: Kể dày, hài nhẹ cho Gen Z; nhấn vào độ tỉ mỉ. Từ khóa/meme ưu tiên: ê khoan, có gu, lên trình." value={narrationNotes} maxLength={1000} rows={3} disabled={isProcessing || isPreviewing}
@@ -1526,6 +1543,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				<span className="text-xs text-neutral-400">Export video</span>
 				<ExportButton />
 			</div>
+			</>}
 		</div>
 	);
 }

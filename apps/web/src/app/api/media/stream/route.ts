@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
 		let contentType = "video/mp4";
 		if (ext === ".mp3") contentType = "audio/mpeg";
 		if (ext === ".wav") contentType = "audio/wav";
+		if (ext === ".vtt") contentType = "text/vtt; charset=utf-8";
 
 		if (range) {
 			const parts = range.replace(/bytes=/, "").split("-");
