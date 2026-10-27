@@ -2,11 +2,7 @@
 
 import { useState } from "react";
 import { Eraser } from "lucide-react";
-import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
-import { buildGraphicElement } from "@/timeline/element-utils";
-import { InsertElementCommand } from "@/commands";
-import { ZERO_MEDIA_TIME } from "@/wasm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,13 +24,12 @@ const PRESETS = [
 	{ label: "Dọc 9:16 · 720 × 1280", width: 720, height: 1280 },
 ];
 
-export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
+export function VideoTools() {
 	const editor = useEditor();
 	const project = useEditor((e) => e.project.getActive());
 	const { width, height } = project.settings.canvasSize;
 	const [customWidth, setCustomWidth] = useState(String(width));
 	const [customHeight, setCustomHeight] = useState(String(height));
-	const [color, setColor] = useState("#000000");
 	const [error, setError] = useState("");
 	const [isRemovalOpen, setIsRemovalOpen] = useState(false);
 	const value = PRESETS.some((p) => p.width === width && p.height === height)
@@ -64,41 +59,6 @@ export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
 		await editor.project.saveCurrentProject();
 		setCustomWidth(String(nextWidth));
 		setCustomHeight(String(nextHeight));
-	};
-
-	const addCover = async () => {
-		const duration = editor.timeline.getTotalDuration();
-		if (duration <= 0) {
-			toast.error("Hãy thêm video vào timeline trước.");
-			return;
-		}
-		const element = buildGraphicElement({
-			definitionId: "rectangle",
-			name: "Che logo",
-			startTime: ZERO_MEDIA_TIME,
-			params: {
-				fill: color,
-				strokeWidth: 0,
-				"transform.scaleX": 0.25,
-				"transform.scaleY": 0.08,
-			},
-		});
-		const command = new InsertElementCommand({
-			element: { ...element, duration },
-			placement: { mode: "auto", trackType: "graphic", insertIndex: 0 },
-		});
-		editor.command.execute({ command });
-		const trackId = command.getTrackId();
-		if (!trackId) {
-			toast.error("Không thể thêm vùng che logo.");
-			return;
-		}
-		if (trackId)
-			editor.selection.setSelectedElements({
-				elements: [{ trackId, elementId: command.getElementId() }],
-			});
-		await editor.project.saveCurrentProject();
-		onEditCover();
 	};
 
 	return (
@@ -191,26 +151,6 @@ export function VideoTools({ onEditCover }: { onEditCover: () => void }) {
 			{isRemovalOpen && (
 				<WatermarkRemovalDialog onClose={() => setIsRemovalOpen(false)} />
 			)}
-			<div className="flex flex-col gap-3 border-t pt-4">
-				<h4 className="text-sm font-semibold">Che logo</h4>
-				<div className="flex items-center justify-between">
-					<Label htmlFor="cover-color">Màu vùng che</Label>
-					<input
-						id="cover-color"
-						aria-label="Màu vùng che"
-						type="color"
-						value={color}
-						onChange={(e) => setColor(e.target.value)}
-						className="h-8 w-12 cursor-pointer"
-					/>
-				</div>
-				<Button onClick={() => void addCover()}>Thêm vùng che logo</Button>
-				<p className="text-xs text-muted-foreground">
-					Vùng che áp dụng suốt video. Kéo vùng che trên preview đến logo, kéo
-					góc để đổi kích thước. Chọn tab “Chi tiết” để chỉnh màu, vị trí và
-					kích thước; nhấn Delete để xóa.
-				</p>
-			</div>
 			<div className="mt-auto flex items-center justify-between border-t pt-4">
 				<span className="text-xs text-muted-foreground">Xuất video</span>
 				<ExportButton />

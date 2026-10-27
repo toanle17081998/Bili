@@ -230,7 +230,12 @@ export function buildTextBackgroundFromElement({
 		stripHeight: readNumberParam({
 			params: element.params,
 			key: "background.stripHeight",
-			fallback: 22,
+			fallback: 12,
+		}),
+		stripWidth: readNumberParam({
+			params: element.params,
+			key: "background.stripWidth",
+			fallback: 88,
 		}),
 	};
 }

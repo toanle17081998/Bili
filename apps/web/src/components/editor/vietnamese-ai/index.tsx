@@ -2,19 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { volumeControlParams } from "./volume-control";
-import { SparklesIcon } from "@hugeicons/core-free-icons";
+import { SparklesIcon, PreviousIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ChevronRight, Loader2, Mic, Pause, Play, ScanEye, Languages, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
 import { insertCaptionChunksAsTextTrack } from "@/subtitles/insert";
@@ -27,15 +20,12 @@ import {
 } from "@/timeline/element-utils";
 import { InsertElementCommand } from "@/commands";
 import { mediaTimeFromSeconds, mediaTimeToSeconds, ZERO_MEDIA_TIME } from "@/wasm";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useLocalStorage } from "@/services/storage/use-local-storage";
 import { VoicePickerDialog } from "./voice-picker-dialog";
 import { VIENEU_PRESET_VOICES } from "@/providers/tts/voices";
-import type { TTSVoice } from "@/providers/tts/types";
 import { cn } from "@/utils/ui";
 import { BackgroundMusicSection } from "./background-music";
-import { StoryNarratorPanel } from "./story-narrator";
 
 interface Props {
 	projectId: string;
@@ -48,71 +38,77 @@ interface PreviewCue {
 	text: string;
 }
 
-const SUBTITLE_BG_PRESETS = [
-	{
-		id: "delogo",
-		name: "🌫️ Xóa text đằng sau (Chuẩn xóa logo)",
-		desc: "Độ che phủ 95%, viền mờ 24px, che sạch 100% chữ gốc",
-		config: {
-			enabled: true,
-			color: "#000000",
-			opacity: 95,
-			blur: 24,
-			cornerRadius: 16,
-			paddingX: 240,
-			paddingY: 90,
-			fullWidth: false,
-			stripHeight: 22,
-		},
-	},
-	{
-		id: "banner",
-		name: "🎬 Dải mờ ngang đáy (TikTok Banner)",
-		desc: "Trải rộng ngang che trọn dải phụ đề đáy video",
-		config: {
-			enabled: true,
-			color: "#050505",
-			opacity: 92,
-			blur: 30,
-			cornerRadius: 4,
-			paddingX: 600,
-			paddingY: 100,
-			fullWidth: true,
-			stripHeight: 22,
-		},
-	},
-	{
-		id: "compact",
-		name: "🔲 Hộp mờ tối giản",
-		desc: "Ôm gọn phụ đề với viền mờ tự nhiên",
-		config: {
-			enabled: true,
-			color: "#121212",
-			opacity: 85,
-			blur: 14,
-			cornerRadius: 20,
-			paddingX: 120,
-			paddingY: 70,
-			fullWidth: false,
-			stripHeight: 22,
-		},
-	},
-] as const;
+function seedGlobalSettingKey(
+	globalKey: string,
+	legacyPrefix: string,
+	projectId: string,
+) {
+	if (typeof window === "undefined") return;
+	try {
+		if (localStorage.getItem(globalKey) !== null) return;
+		const legacyCurrent = localStorage.getItem(`${legacyPrefix}-${projectId}`);
+		if (legacyCurrent !== null) {
+			localStorage.setItem(globalKey, legacyCurrent);
+			return;
+		}
+		const legacyBv = localStorage.getItem(`${legacyPrefix}-BV17FwzePEpL`);
+		if (legacyBv !== null) {
+			localStorage.setItem(globalKey, legacyBv);
+		}
+	} catch {
+		// Ignore storage errors
+	}
+}
 
 export function VietnameseAiPanel({ projectId }: Props) {
 	const editor = useEditor();
-	const [mode, setMode] = useState<"dubbing" | "narration" | "story">("dubbing");
-	const [narrationNotes, setNarrationNotes] = useState("");
-	const [narrationCaptions, setNarrationCaptions] = useState(true);
-	const narrationSource = useRef<{ signature: string; videoPath: string; timelineStart: number; elementId: string } | null>(null);
-	const narrationDraftSignature = useRef<string | null>(null);
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
+	useState(() => {
+		seedGlobalSettingKey(
+			"ai-global-subtitle-text-color",
+			"subtitle-text-color",
+			projectId,
+		);
+		seedGlobalSettingKey(
+			"ai-global-subtitle-font-size",
+			"subtitle-font-size",
+			projectId,
+		);
+		seedGlobalSettingKey(
+			"ai-global-subtitle-position-y",
+			"subtitle-position-y",
+			projectId,
+		);
+		seedGlobalSettingKey(
+			"ai-global-subtitle-position-x",
+			"subtitle-position-x",
+			projectId,
+		);
+		seedGlobalSettingKey(
+			"ai-global-subtitle-background",
+			"subtitle-background",
+			projectId,
+		);
+		seedGlobalSettingKey(
+			"ai-global-subtitle-max-lines",
+			"subtitle-max-lines",
+			projectId,
+		);
+		return true;
+	});
+
 	const [voice, setVoice] = useState(() => {
 		if (typeof window !== "undefined") {
-			const saved = localStorage.getItem(`ai-selected-voice-${projectId}`);
-			if (saved) return saved;
+			const saved =
+				localStorage.getItem("ai-global-selected-voice") ??
+				localStorage.getItem(`ai-selected-voice-${projectId}`) ??
+				localStorage.getItem("ai-selected-voice-BV17FwzePEpL");
+			if (saved) {
+				localStorage.setItem("ai-global-selected-voice", saved);
+				return saved;
+			}
 		}
 		return "Hải Đăng";
 	});
@@ -189,27 +185,58 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			toast.error(`Lỗi khi phát mẫu thử giọng "${voiceName}"`);
 		}
 	};
-	const [originalVolume, setOriginalVolume] = useState([20]); // 20%
-	const [voiceoverVolume, setVoiceoverVolume] = useState([100]); // 100%
-	const [subtitleStyle, setSubtitleStyle] = useState("bold");
-	const [subtitleBackground, setSubtitleBackground] = useLocalStorage({
-		key: `subtitle-background-${projectId}`,
+	const defaultBaselineY = Math.round(canvasSize.height * 0.44); // ~845px on 1920
+
+	const [originalVolume, setOriginalVolume] = useLocalStorage<number[]>({
+		key: "ai-global-original-volume",
+		defaultValue: [20],
+	});
+	const [voiceoverVolume, setVoiceoverVolume] = useLocalStorage<number[]>({
+		key: "ai-global-voiceover-volume",
+		defaultValue: [100],
+	});
+
+	const [subtitleTextColor, setSubtitleTextColor] = useLocalStorage({
+		key: "ai-global-subtitle-text-color",
+		defaultValue: "#FFFF00",
+	});
+	const [subtitleFontSize, setSubtitleFontSize] = useLocalStorage({
+		key: "ai-global-subtitle-font-size",
+		defaultValue: 3.5,
+	});
+	const [subtitlePositionY, setSubtitlePositionY] = useLocalStorage({
+		key: "ai-global-subtitle-position-y",
+		defaultValue: defaultBaselineY,
+	});
+	const [subtitlePositionX, setSubtitlePositionX] = useLocalStorage({
+		key: "ai-global-subtitle-position-x",
+		defaultValue: 0,
+	});
+
+	const [subtitleMaxLines, setSubtitleMaxLines] = useLocalStorage<number>({
+		key: "ai-global-subtitle-max-lines",
+		defaultValue: 2,
+	});
+
+	const [subtitleBackground, setSubtitleBackground, isSubtitleBgReady] = useLocalStorage({
+		key: "ai-global-subtitle-background",
 		defaultValue: {
 			enabled: true,
 			color: "#000000",
-			opacity: 95,
-			blur: 24,
-			cornerRadius: 16,
-			paddingX: 240,
-			paddingY: 90,
-			fullWidth: false,
-			backdropBlur: false,
-			stripHeight: 22,
+			opacity: 0,
+			blur: 30,
+			cornerRadius: 12,
+			paddingX: 0,
+			paddingY: 0,
+			fullWidth: true,
+			backdropBlur: true,
+			stripHeight: 12,
+			stripWidth: 88,
 		},
 	});
 
 	// Helper to calculate RGBA string from hex color and opacity percentage
-	const getEffectiveBgColor = (hex: string, opacity: number = 95) => {
+	const getEffectiveBgColor = (hex: string, opacity: number = 0) => {
 		const alpha = Math.max(0, Math.min(100, opacity)) / 100;
 		const cleanHex = hex.replace("#", "");
 		let r = 0, g = 0, b = 0;
@@ -228,18 +255,17 @@ export function VietnameseAiPanel({ projectId }: Props) {
 	const [existingLocalized, setExistingLocalized] = useState<any>(null);
 
 	useEffect(() => {
-		if (mode === "story") return;
 		let cancelled = false;
 		const checkExisting = async () => {
 			try {
 				const res = await fetch(
-					`/api/localization/process?projectId=${encodeURIComponent(projectId)}&mode=${mode}`,
+					`/api/localization/process?projectId=${encodeURIComponent(projectId)}&mode=dubbing`,
 				);
 				if (!res.ok) return;
 				const data = await res.json();
 				if (!cancelled && data.success && data.localizedProject) {
 					setExistingLocalized(data.localizedProject);
-					if (mode === "dubbing" && data.localizedProject.subtitles?.length) {
+					if (data.localizedProject.subtitles?.length) {
 						setPreviewCues(data.localizedProject.subtitles);
 						setHasPreviewed(true);
 					}
@@ -252,67 +278,122 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		return () => {
 			cancelled = true;
 		};
-	}, [projectId, mode]);
+	}, [projectId]);
 
-	const updateSubtitleBackground = (
-		patch: Partial<typeof subtitleBackground>,
-	) => {
-		const background = { ...subtitleBackground, ...patch };
-		setSubtitleBackground({ value: background });
+	const updateSubtitleLayout = (patch: {
+		fontSize?: number;
+		positionY?: number;
+		positionX?: number;
+		textColor?: string;
+		maxLines?: number;
+		background?: Partial<typeof subtitleBackground>;
+	}) => {
+		const nextFontSize = patch.fontSize ?? subtitleFontSize;
+		const nextPosY = patch.positionY ?? subtitlePositionY;
+		const nextPosX = patch.positionX ?? subtitlePositionX;
+		const nextColor = patch.textColor ?? subtitleTextColor;
+		const nextMaxLines = patch.maxLines ?? subtitleMaxLines;
+		const nextBg = patch.background
+			? { ...subtitleBackground, ...patch.background }
+			: subtitleBackground;
+
+		if (patch.fontSize !== undefined) setSubtitleFontSize({ value: nextFontSize });
+		if (patch.positionY !== undefined) setSubtitlePositionY({ value: nextPosY });
+		if (patch.positionX !== undefined) setSubtitlePositionX({ value: nextPosX });
+		if (patch.textColor !== undefined) setSubtitleTextColor({ value: nextColor });
+		if (patch.maxLines !== undefined) setSubtitleMaxLines({ value: nextMaxLines });
+		if (patch.background !== undefined) setSubtitleBackground({ value: nextBg });
+
+		if (nextMaxLines === 1) {
+			setPreviewCues((prev) =>
+				prev.map((c) => ({ ...c, text: c.text.replace(/\n/g, " ").trim() })),
+			);
+		}
+
 		const scene = editor.scenes.getActiveSceneOrNull();
 		if (!scene) return;
 		const tracks = [scene.tracks.main, ...scene.tracks.overlay];
-		const effectiveColor = getEffectiveBgColor(
-			background.color,
-			background.opacity ?? 95,
-		);
-		const savedCaptionTrack = localStorage.getItem(
-			`ai-caption-track-${projectId}`,
-		);
+		const savedCaptionTrack = localStorage.getItem(`ai-caption-track-${projectId}`);
+		const effectiveColor = getEffectiveBgColor(nextBg.color, nextBg.opacity ?? 0);
+		const offsetY = nextPosY - defaultBaselineY;
 
 		editor.timeline.updateElements({
-			updates: tracks.flatMap((track) =>
-				track.type === "text"
-					? track.elements
-							.filter(
-								(element) =>
-									track.id === savedCaptionTrack ||
-									/^Caption(\s+\d+)?$/i.test(element.name) ||
-									element.name.toLowerCase().startsWith("caption"),
-							)
-							.map((element) => ({
-								trackId: track.id,
-								elementId: element.id,
-								patch: {
-									params: {
-										...element.params,
-										"background.enabled": background.enabled,
-										"background.color": effectiveColor,
-										"background.paddingX": background.paddingX,
-										"background.paddingY": background.paddingY,
-										"background.cornerRadius":
-											background.cornerRadius ?? 16,
-										"background.blur": background.blur ?? 24,
-										"background.fullWidth": background.fullWidth ?? false,
-										"background.backdropBlur": background.backdropBlur ?? false,
-										"background.stripHeight": background.stripHeight ?? 22,
-									},
-								},
-							}))
-					: [],
-			),
-		});
-		void editor.project.saveCurrentProject();
-	};
+			updates: tracks.flatMap((track) => {
+				if (track.type !== "text") return [];
+				const captionElements = track.elements
+					.filter(
+						(element) =>
+							track.id === savedCaptionTrack ||
+							/^Caption(\s+\d+)?$/i.test(element.name) ||
+							element.name.toLowerCase().startsWith("caption"),
+					)
+					.slice()
+					.sort((a, b) => a.startTime - b.startTime);
+				const totalDurationSec = mediaTimeToSeconds({
+					time: editor.timeline.getTotalDuration(),
+				});
 
-	const selectSubtitleStyle = (value: string) => {
-		setSubtitleStyle(value);
-		if (value !== "yellow-reference") return;
-		updateSubtitleBackground({ enabled: true, fullWidth: true, backdropBlur: true, stripHeight: 10, color: "#000000", opacity: 0, blur: 30, cornerRadius: 0, paddingX: 0, paddingY: 0 });
-		const scene = editor.scenes.getActiveSceneOrNull();
-		if (!scene) return;
-		const savedTrack = localStorage.getItem(`ai-caption-track-${projectId}`);
-		editor.timeline.updateElements({ updates: [scene.tracks.main, ...scene.tracks.overlay].flatMap((track) => track.type === "text" ? track.elements.filter((element) => track.id === savedTrack || element.name.toLowerCase().startsWith("caption")).map((element) => ({ trackId: track.id, elementId: element.id, patch: { params: { ...element.params, content: typeof element.params.content === "string" ? element.params.content.replace(/\n/g, " ") : element.params.content, color: "#FFFF00", fontFamily: "Arial", fontWeight: "normal", fontSize: 3.33, textAlign: "center", "stroke.color": "#000000", "stroke.width": 4, "transform.positionX": 0, "transform.positionY": canvasSize.height * 0.44 } } })) : []) });
+				return captionElements.map((element, idx) => {
+					const nextEl = captionElements[idx + 1];
+					const startSec = mediaTimeToSeconds({ time: element.startTime });
+					const durSec = mediaTimeToSeconds({ time: element.duration });
+					const endSec = startSec + durSec;
+					const maxEndSec = nextEl
+						? mediaTimeToSeconds({ time: nextEl.startTime })
+						: Math.max(endSec, totalDurationSec);
+					const gap = Math.max(0, maxEndSec - endSec);
+					const alreadyExtended =
+						element.params["background.tailHoldApplied"] === true;
+					const tailHold =
+						!alreadyExtended && gap > 0.02
+							? gap <= 0.7
+								? gap
+								: Math.min(0.55, gap)
+							: 0;
+
+					return {
+						trackId: track.id,
+						elementId: element.id,
+						patch: {
+							...(tailHold > 0
+								? {
+										duration: mediaTimeFromSeconds({
+											seconds: durSec + tailHold,
+										}),
+									}
+								: {}),
+							params: {
+								...element.params,
+								content:
+									nextMaxLines === 1
+										? String(element.params.content).replace(/\n/g, " ").trim()
+										: element.params.content,
+								fontSize: nextFontSize,
+								color: nextColor,
+								textAlign: "center",
+								"subtitle.maxLines": nextMaxLines,
+								"stroke.color": "#000000",
+								"stroke.width": 4,
+								"transform.positionX": nextPosX,
+								"transform.positionY": nextPosY,
+								"background.enabled": nextBg.enabled,
+								"background.color": effectiveColor,
+								"background.paddingX": nextBg.paddingX ?? 0,
+								"background.paddingY": nextBg.paddingY ?? 0,
+								"background.cornerRadius": nextBg.cornerRadius ?? 12,
+								"background.blur": nextBg.blur ?? 30,
+								"background.fullWidth": nextBg.fullWidth ?? true,
+								"background.backdropBlur": nextBg.backdropBlur ?? true,
+								"background.stripHeight": nextBg.stripHeight ?? 12,
+								"background.stripWidth": nextBg.stripWidth ?? 88,
+								"background.offsetY": offsetY,
+								"background.tailHoldApplied": true,
+							},
+						},
+					};
+				});
+			}),
+		});
 		void editor.project.saveCurrentProject();
 	};
 
@@ -376,6 +457,26 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		void editor.project.saveCurrentProject();
 	}, [activeScene, editor, projectId]);
 
+	const syncedSceneRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!activeScene || !isSubtitleBgReady) return;
+		if (syncedSceneRef.current === activeScene.id) return;
+		syncedSceneRef.current = activeScene.id;
+		updateSubtitleLayout({});
+		const tracks = [
+			activeScene.tracks.main,
+			...activeScene.tracks.overlay,
+			...activeScene.tracks.audio,
+		];
+		const hasAiBackground = tracks.some((track) =>
+			track.elements.some(
+				(element) => element.type === "audio" && element.name.startsWith("ai-background"),
+			),
+		);
+		applyVolume("original", hasAiBackground ? (originalVolume[0] ?? 20) : 100);
+		applyVolume("voice", voiceoverVolume[0] ?? 100);
+	}, [activeScene, isSubtitleBgReady]);
+
 	const applyVolume = (kind: "original" | "voice", value: number) => {
 		const scene = editor.scenes.getActiveScene();
 		const tracks = [
@@ -383,14 +484,24 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			...scene.tracks.overlay,
 			...scene.tracks.audio,
 		];
+		const hasAiBackground = tracks.some((track) =>
+			track.elements.some(
+				(element) => element.type === "audio" && element.name.startsWith("ai-background"),
+			),
+		);
 		editor.timeline.updateElements({
 			updates: tracks.flatMap((track) =>
 				track.elements
-					.filter((element) =>
-						kind === "original"
-							? element.type === "audio" && element.name.startsWith("ai-background")
-							: element.type === "audio" && element.name.startsWith("voice-"),
-					)
+					.filter((element) => {
+						if (kind === "voice") {
+							return element.type === "audio" && element.name.startsWith("voice-");
+						}
+						// kind === "original"
+						if (hasAiBackground) {
+							return element.type === "audio" && element.name.startsWith("ai-background");
+						}
+						return element.type === "video";
+					})
 					.map((element) => ({
 						trackId: track.id,
 						elementId: element.id,
@@ -417,23 +528,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		return { asset, start, duration, timelineStart, signature, elementId: video.id };
 	};
 
-	const prepareNarrationSource = async () => {
-		const source = getNarrationSelection();
-		if (narrationSource.current?.signature === source.signature) return narrationSource.current;
-		setProgressStep("Đang chuẩn bị hình ảnh video...");
-		const form = new FormData();
-		form.set("video", source.asset.file);
-		form.set("projectId", projectId);
-		form.set("start", String(source.start));
-		form.set("duration", String(source.duration));
-		const response = await fetch("/api/localization/sources", { method: "POST", body: form });
-		const data = await response.json();
-		if (!response.ok || !data.success) throw new Error(data.error || "Không chuẩn bị được video.");
-		narrationSource.current = { signature: source.signature, videoPath: data.videoPath, timelineStart: source.timelineStart, elementId: source.elementId };
-		return narrationSource.current;
-	};
-
-	const handlePreview = async () => {
+	const handlePreview = async (force: boolean = false, overrideMaxLines?: number) => {
 		const importedDataStr = sessionStorage.getItem(
 			`imported_video_${projectId}`,
 		);
@@ -443,27 +538,28 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			videoPath = data.localMediaPath;
 		}
 
+		const effectiveMaxLines = overrideMaxLines ?? subtitleMaxLines;
 		setIsPreviewing(true);
-		setProgressStep(mode === "narration" ? "Đang phân tích hình ảnh video..." : "Đang nhận diện lời thoại & tạo kịch bản phụ đề 1-2 dòng...");
-		const toastId = toast.loading(mode === "narration" ? "AI đang viết lời thuyết minh..." : "Đang trích xuất & tạo phụ đề xem trước...");
+		setProgressStep(
+			`Đang nhận diện lời thoại & tạo kịch bản phụ đề (tối đa ${effectiveMaxLines} dòng)...`,
+		);
+		const toastId = toast.loading("Đang trích xuất & tạo phụ đề xem trước...");
 
 		try {
-			const source = mode === "narration" ? await prepareNarrationSource() : null;
-			if (source) setProgressStep("AI đang tìm mạch kể và viết lời dẫn tự nhiên...");
 			const res = await fetch("/api/localization/preview", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					projectId,
-					videoPath: source?.videoPath || videoPath || "default",
-					mode,
-					notes: mode === "narration" ? narrationNotes : undefined,
+					videoPath: videoPath || "default",
+					mode: "dubbing",
+					force,
+					maxLines: effectiveMaxLines,
 				}),
 			});
 
 			const data = await res.json();
 			if (!data.success) {
-				if (mode === "narration" && res.status === 404) narrationSource.current = null;
 				throw new Error(data.error || "Không thể tạo bản xem trước phụ đề");
 			}
 
@@ -475,10 +571,11 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			}));
 
 			setPreviewCues(cues);
-			narrationDraftSignature.current = source?.signature ?? null;
 			setHasPreviewed(true);
-			toast.success(`Đã tạo ${cues.length} đoạn ${mode === "narration" ? "thuyết minh" : "phụ đề"}!`, { id: toastId });
-			setProgressStep(mode === "narration" ? "Kịch bản đã sẵn sàng để duyệt." : `Sẵn sàng xem trước: ${cues.length} câu phụ đề (1-2 dòng). Bạn có thể chỉnh sửa trước khi tạo giọng.`);
+			toast.success(`Đã tạo ${cues.length} đoạn phụ đề (tối đa ${effectiveMaxLines} dòng)!`, { id: toastId });
+			setProgressStep(
+				`Sẵn sàng xem trước: ${cues.length} câu phụ đề (tối đa ${effectiveMaxLines} dòng). Bạn có thể chỉnh sửa trước khi tạo giọng.`,
+			);
 		} catch (err: any) {
 			toast.error(err.message || "Lỗi khi xem trước phụ đề", { id: toastId });
 			setProgressStep(null);
@@ -494,11 +591,6 @@ export function VietnameseAiPanel({ projectId }: Props) {
 			return next;
 		});
 	};
-	const updateCueTime = (index: number, field: "start" | "end", value: number) => {
-		if (!Number.isFinite(value)) return;
-		setPreviewCues((current) => current.map((cue, i) => i === index ? { ...cue, [field]: value } : cue));
-	};
-
 	const removeCue = (index: number) => {
 		setPreviewCues((prev) => prev.filter((_, i) => i !== index));
 	};
@@ -704,48 +796,67 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		);
 
 		// Convert subtitles into OpenCut cues and insert on timeline
-		if ((localized.mode !== "narration" || narrationCaptions) && localized.subtitles && localized.subtitles.length > 0) {
+		if (localized.subtitles && localized.subtitles.length > 0) {
 			setProgressStep("Đang tạo và gắn phụ đề tiếng Việt vào timeline...");
-			const cues: SubtitleCue[] = localized.subtitles.map((sub: any) => ({
-				text:
-					subtitleStyle === "yellow-reference"
-						? sub.text.replace(/\n/g, " ")
-						: sub.text,
-				startTime: sub.start + (localized.timelineStart ?? 0),
-				duration: Math.max(0.6, sub.end - sub.start),
-				style: {
-					fontWeight: subtitleStyle === "bold" ? "bold" : "normal",
-					color:
-						subtitleStyle === "yellow-reference"
-							? "#FFFF00"
-							: "#FFFFFF",
-					...(subtitleStyle === "yellow-reference"
-						? {
-								fontSizeRatioOfPlayHeight: 0.037,
-								strokeColor: "#000000",
-								strokeWidth: 4,
-								placement: {
-									verticalAlign: "bottom" as const,
-									marginVerticalRatio: 0.025,
-								},
-							}
-						: {}),
-					background: {
-						enabled: subtitleBackground.enabled,
-						color: getEffectiveBgColor(
-							subtitleBackground.color,
-							subtitleBackground.opacity ?? 95,
-						),
-						paddingX: subtitleBackground.paddingX,
-						paddingY: subtitleBackground.paddingY,
-						cornerRadius: subtitleBackground.cornerRadius ?? 16,
-						blur: subtitleBackground.blur ?? 24,
-						fullWidth: subtitleBackground.fullWidth ?? false,
-						backdropBlur: subtitleBackground.backdropBlur ?? false,
-						stripHeight: subtitleBackground.stripHeight ?? 22,
+			const offsetY = subtitlePositionY - defaultBaselineY;
+			const rawSubs = localized.subtitles;
+			const cues: SubtitleCue[] = rawSubs.map((sub: any, idx: number) => {
+				const nextSub = rawSubs[idx + 1];
+				const videoEnd = localized.source?.duration ?? sub.end + 0.6;
+				const maxEnd = nextSub ? nextSub.start : Math.max(sub.end, videoEnd);
+				const gap = Math.max(0, maxEnd - sub.end);
+				// Hold the last subtitle of each segment slightly longer so the original Chinese subtitle disappears first
+				const tailHold =
+					gap > 0.02
+						? gap <= 0.7
+							? gap
+							: Math.min(0.55, gap)
+						: 0;
+				const effectiveEnd = sub.end + tailHold;
+
+				return {
+					text:
+						subtitleMaxLines === 1
+							? sub.text.replace(/\s+/g, " ").trim()
+							: sub.text.replace(/\r\n/g, "\n"),
+					startTime: sub.start + (localized.timelineStart ?? 0),
+					duration: Math.max(0.6, effectiveEnd - sub.start),
+					style: {
+						fontWeight: "bold",
+						fontFamily: "Arial",
+						color: subtitleTextColor,
+						strokeColor: "#000000",
+						strokeWidth: 4,
+						fontSize: subtitleFontSize,
+						maxLines: subtitleMaxLines,
+						positionX: subtitlePositionX,
+						positionY: subtitlePositionY,
+						placement: {
+							verticalAlign: "bottom" as const,
+							marginVerticalRatio: Math.max(
+								0.01,
+								(canvasSize.height / 2 - subtitlePositionY) / canvasSize.height,
+							),
+						},
+						background: {
+							enabled: subtitleBackground.enabled,
+							color: getEffectiveBgColor(
+								subtitleBackground.color,
+								subtitleBackground.opacity ?? 0,
+							),
+							paddingX: subtitleBackground.paddingX ?? 0,
+							paddingY: subtitleBackground.paddingY ?? 0,
+							cornerRadius: subtitleBackground.cornerRadius ?? 12,
+							blur: subtitleBackground.blur ?? 30,
+							fullWidth: subtitleBackground.fullWidth ?? true,
+							backdropBlur: subtitleBackground.backdropBlur ?? true,
+							stripHeight: subtitleBackground.stripHeight ?? 12,
+							stripWidth: subtitleBackground.stripWidth ?? 88,
+							offsetY,
+						},
 					},
-				},
-			}));
+				};
+			});
 			const captionTrack = insertCaptionChunksAsTextTrack({
 				editor,
 				captions: cues,
@@ -790,19 +901,13 @@ export function VietnameseAiPanel({ projectId }: Props) {
 		const toastId = toast.loading("Đang xử lý Việt hóa video...");
 
 		try {
-			const source = mode === "narration" ? narrationSource.current : null;
-			if (mode === "narration" && (!source || !hasPreviewed || !previewCues.length || narrationDraftSignature.current !== getNarrationSelection().signature))
-				throw new Error("Tạo và duyệt kịch bản cho video hiện tại trước khi tạo giọng.");
 			const res = await fetch("/api/localization/process", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					projectId,
-					videoPath: source?.videoPath || videoPath || "default",
-					mode,
-					timelineStart: source?.timelineStart,
-					sourceSignature: source?.signature,
-					sourceElementId: source?.elementId,
+					videoPath: videoPath || "default",
+					mode: "dubbing",
 					voice,
 					subtitles:
 						hasPreviewed && previewCues.length > 0
@@ -837,62 +942,40 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					</div>
 					<h3 className="font-semibold text-sm">Vietnamese AI</h3>
 				</div>
-				<span className="text-[11px] font-mono bg-rose-950 text-rose-300 px-2 py-0.5 rounded border border-rose-800/40">
-					{canvasSize.width} × {canvasSize.height}
-				</span>
+				<div className="flex items-center gap-2">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => editor.playback.seek({ time: ZERO_MEDIA_TIME })}
+						className="h-6 px-2 text-[10px] gap-1 border-neutral-700 bg-neutral-950 text-neutral-300 hover:text-white hover:bg-neutral-800"
+						title="Chuyển playhead về 0 giây (Đầu timeline)"
+					>
+						<HugeiconsIcon icon={PreviousIcon} className="size-3" />
+						Về 0s
+					</Button>
+					<span className="text-[11px] font-mono bg-rose-950 text-rose-300 px-2 py-0.5 rounded border border-rose-800/40">
+						{canvasSize.width} × {canvasSize.height}
+					</span>
+				</div>
 			</div>
 
-			<Tabs value={mode} onValueChange={(value) => {
-				if (isProcessing || isPreviewing) return;
-				setMode(value as "dubbing" | "narration" | "story");
-				setPreviewCues([]);
-				setHasPreviewed(false);
-				setExistingLocalized(null);
-				setProgressStep(null);
-				narrationDraftSignature.current = null;
-			}}>
-				<TabsList className="grid w-full grid-cols-3">
-					<TabsTrigger value="dubbing" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><Languages className="size-3.5" />Lồng tiếng</TabsTrigger>
-					<TabsTrigger value="narration" disabled={isProcessing || isPreviewing} className="gap-1.5 text-xs"><ScanEye className="size-3.5" />Thuyết minh AI</TabsTrigger>
-					<TabsTrigger value="story" disabled={isProcessing || isPreviewing} className="text-xs">Story Narrator</TabsTrigger>
-				</TabsList>
-			</Tabs>
-			{mode === "story" ? <StoryNarratorPanel key={projectId} projectId={projectId} getSource={() => {
-				const source = getNarrationSelection();
-				return { file: source.asset.file, start: source.start, duration: source.duration, signature: source.signature, timelineStart: source.timelineStart, elementId: source.elementId };
-			}} onImportRender={async (project) => {
-				if (!project.render) throw new Error("Xuất video trước khi thêm vào thư viện.");
-				const response = await fetch(project.render.url);
-				if (!response.ok) throw new Error("Không tải được thành phẩm.");
-				const file = new File([await response.blob()], `lego-story-${projectId}.mp4`, { type: "video/mp4" });
-				const [processed] = await processMediaAssets({ files: [file] });
-				if (!processed) throw new Error("Không đọc được thành phẩm.");
-				const asset = await editor.media.addMediaAsset({ projectId, asset: processed });
-				if (!asset) throw new Error("Không lưu được thành phẩm vào thư viện.");
-				toast.success("Đã thêm thành phẩm vào thư viện. Kéo video vào timeline để tiếp tục chỉnh sửa.");
-			}} /> : <>
-			{mode === "narration" && <div className="flex flex-col gap-2">
-				<Label htmlFor="narration-notes" className="text-xs text-neutral-400">Ngữ cảnh, phong cách & từ khóa ưu tiên (tùy chọn)</Label>
-				<textarea id="narration-notes" aria-describedby="narration-notes-help" placeholder="Ví dụ: Kể dày, hài nhẹ cho Gen Z; nhấn vào độ tỉ mỉ. Từ khóa/meme ưu tiên: ê khoan, có gu, lên trình." value={narrationNotes} maxLength={1000} rows={3} disabled={isProcessing || isPreviewing}
-					onChange={(event) => setNarrationNotes(event.target.value)} className="w-full resize-none rounded-md border border-neutral-700 bg-neutral-950 p-2 text-xs focus:outline-none focus:border-rose-500" />
-				<p id="narration-notes-help" className="text-[11px] leading-relaxed text-neutral-400">Mặc định lời dẫn dày, giọng Gen Z, hook gợi tò mò và dùng slang có chọn lọc. Thêm meme mới hoặc từ khóa muốn ưu tiên ở trên; AI dùng khi hợp ngữ cảnh. Muốn ít lời hoặc trang trọng, ghi rõ tại đây.</p>
-				<div className="flex items-center gap-2">
-					<Checkbox id="narration-captions" checked={narrationCaptions} disabled={isProcessing || isPreviewing} onCheckedChange={(checked) => setNarrationCaptions(checked === true)} />
-					<Label htmlFor="narration-captions" className="text-xs">Tạo kèm phụ đề</Label>
-				</div>
-			</div>}
+			<div className="flex items-center gap-1.5 text-xs font-medium">
+				<Languages className="size-3.5" />
+				Lồng tiếng
+			</div>
 			<BackgroundMusicSection key={projectId} projectId={projectId} disabled={isProcessing || isPreviewing} />
 			{/* Controls Form */}
-			{mode === "dubbing" && <p className="text-[11px] text-neutral-400 leading-relaxed">
+			<p className="text-[11px] text-neutral-400 leading-relaxed">
 				Phụ đề chia ngắn để dễ đọc. Giọng đọc được gom theo đoạn liền mạch,
 				giữ các khoảng nghỉ và ghép thành một track trên timeline.
-			</p>}
+			</p>
 			<div className="flex flex-col gap-4">
 				{/* Voice selector */}
 				<div className="flex flex-col gap-2">
 					<div className="flex items-center justify-between">
 						<Label className="text-xs text-neutral-400">
-							Giọng đọc thuyết minh
+							Giọng lồng tiếng
 						</Label>
 						<span className="text-[11px] font-mono text-rose-400">
 							25 giọng TTS
@@ -1007,6 +1090,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							const chosenName = chosen.name || chosen.id;
 							setVoice(chosenName);
 							if (typeof window !== "undefined") {
+								localStorage.setItem("ai-global-selected-voice", chosenName);
 								localStorage.setItem(`ai-selected-voice-${projectId}`, chosenName);
 							}
 							setIsVoicePickerOpen(false);
@@ -1017,7 +1101,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				</div>
 
 				{/* Original Volume */}
-				{mode === "dubbing" && <div className="flex flex-col gap-1.5">
+				<div className="flex flex-col gap-1.5">
 					<div className="flex justify-between text-xs">
 						<span className="text-neutral-400">Âm thanh gốc</span>
 						<span className="text-neutral-300 font-mono">
@@ -1028,7 +1112,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						disabled={isProcessing}
 						value={originalVolume}
 						onValueChange={(value) => {
-							setOriginalVolume(value);
+							setOriginalVolume({ value });
 							applyVolume("original", value[0]);
 						}}
 						min={0}
@@ -1036,7 +1120,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						step={5}
 						className="py-1"
 					/>
-				</div>}
+				</div>
 
 				{/* Voiceover Volume */}
 				<div className="flex flex-col gap-1.5">
@@ -1050,7 +1134,7 @@ export function VietnameseAiPanel({ projectId }: Props) {
 						disabled={isProcessing}
 						value={voiceoverVolume}
 						onValueChange={(value) => {
-							setVoiceoverVolume(value);
+							setVoiceoverVolume({ value });
 							applyVolume("voice", value[0]);
 						}}
 						min={0}
@@ -1060,295 +1144,422 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					/>
 				</div>
 
-				{/* Subtitle Style */}
-				<details key={mode} open={mode === "dubbing" ? true : undefined} className={cn(mode === "narration" && !narrationCaptions && "hidden")}>
-					<summary className={cn("cursor-pointer text-xs text-neutral-400", mode === "dubbing" && "hidden")}>Kiểu phụ đề</summary>
-				<div className="flex flex-col gap-1.5">
-					<Label className="text-xs text-neutral-400">Phong cách phụ đề</Label>
-					<Select value={subtitleStyle} onValueChange={selectSubtitleStyle}>
-						<SelectTrigger className="bg-neutral-950 border-neutral-800 text-xs">
-							<SelectValue placeholder="Kiểu phụ đề" />
-						</SelectTrigger>
-						<SelectContent className="bg-neutral-900 border-neutral-800 text-xs">
-							<SelectItem value="bold">In đậm (Bold TikTok)</SelectItem>
-							<SelectItem value="minimal">Tối giản (Minimal)</SelectItem>
-							<SelectItem value="yellow-reference">Chữ vàng viền đen (theo ảnh mẫu)</SelectItem>
-						</SelectContent>
-					</Select>
-					<div className="mt-2 flex items-center justify-between">
-						<Button type="button" variant="outline" size="sm" disabled={isProcessing} onClick={() => selectSubtitleStyle("yellow-reference")}>Áp dụng mẫu chữ vàng + nền video mờ</Button>
+				{/* Subtitle Configuration - Auto: Chữ vàng + Nền video mờ */}
+				<div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-950/10 p-3">
+					<div className="flex items-center justify-between">
 						<div className="flex items-center gap-2">
+							<span className="flex size-2 rounded-full bg-amber-400 animate-pulse" />
+							<Label className="text-xs font-semibold text-amber-200">
+								Phụ đề tự động (Chữ vàng + Nền video mờ)
+							</Label>
+						</div>
+						<div className="flex items-center gap-1.5">
 							<Checkbox
-								id="subtitle-background"
-								checked={subtitleBackground.enabled}
+								id="subtitle-backdrop-blur"
+								checked={subtitleBackground.enabled && subtitleBackground.backdropBlur}
 								disabled={isProcessing}
 								onCheckedChange={(checked) =>
-									updateSubtitleBackground({ enabled: checked === true })
+									updateSubtitleLayout({
+										background: {
+											enabled: checked === true,
+											backdropBlur: checked === true,
+											fullWidth: true,
+										},
+									})
 								}
 							/>
 							<Label
-								htmlFor="subtitle-background"
-								className="cursor-pointer text-xs font-medium"
+								htmlFor="subtitle-backdrop-blur"
+								className="cursor-pointer text-[11px] text-neutral-300"
 							>
-								Nền phụ đề làm mờ (Xóa text / logo gốc)
+								Nền mờ
 							</Label>
 						</div>
 					</div>
 
-					{subtitleBackground.enabled && (
-						<div className="flex flex-col gap-3.5 rounded-lg border border-neutral-700 bg-neutral-950/60 p-3">
-							<div className="flex items-center gap-2">
-								<Checkbox id="subtitle-full-width" checked={subtitleBackground.fullWidth ?? false} disabled={isProcessing} onCheckedChange={(checked) => updateSubtitleBackground({ fullWidth: checked === true })} />
-								<Label htmlFor="subtitle-full-width" className="cursor-pointer text-xs">Phủ ngang toàn bộ đáy video</Label>
-							</div>
-							{subtitleBackground.fullWidth && <div className="flex flex-col gap-1">
-								<div className="flex items-center gap-2">
-									<Checkbox id="subtitle-backdrop-blur" checked={subtitleBackground.backdropBlur ?? false} disabled={isProcessing} onCheckedChange={(checked) => updateSubtitleBackground({ backdropBlur: checked === true })} />
-									<Label htmlFor="subtitle-backdrop-blur" className="text-xs">Làm mờ hình video phía sau chữ</Label>
-								</div>
-								<Label htmlFor="subtitle-strip-height" className="text-xs">Chiều cao dải nền: {subtitleBackground.stripHeight ?? 22}%</Label>
-								<input id="subtitle-strip-height" type="range" min={5} max={50} step={1} value={subtitleBackground.stripHeight ?? 22} disabled={isProcessing} onChange={(event) => updateSubtitleBackground({ stripHeight: Number(event.target.value) })} className="w-full accent-rose-500" />
-								<p className="text-[10px] text-neutral-400">Bật làm mờ hình và giảm độ che phủ về 0% để giữ màu video như mẫu.</p>
-							</div>}
-							{/* Quick Presets */}
-							<div className="flex flex-col gap-1.5">
-								<span className="text-[11px] font-semibold text-neutral-300">
-									Kiểu làm mờ (Presets nhanh)
+					<p className="text-[11px] text-neutral-400 leading-snug">
+						Dải che mờ tách rời khỏi đáy video, tùy chỉnh tự do chiều cao và độ rộng 2 bên. Text tiêu đề/phụ đề luôn nằm gọn và căn giữa chính tâm dải mờ.
+					</p>
+
+					{/* 1. Cỡ chữ (Font Size) */}
+					<div className="flex flex-col gap-1.5 border-t border-neutral-800/80 pt-2.5">
+						<div className="flex justify-between items-center text-xs">
+							<Label htmlFor="subtitle-font-size" className="text-xs font-medium text-neutral-300">
+								Cỡ chữ (Font Size)
+							</Label>
+							<div className="flex items-center gap-1.5">
+								<span className="font-mono text-xs font-semibold text-amber-300 bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-800/50">
+									{subtitleFontSize}
 								</span>
-								<div className="grid grid-cols-1 gap-1.5">
-									{SUBTITLE_BG_PRESETS.map((preset) => (
-										<button
-											key={preset.id}
-											type="button"
-											disabled={isProcessing}
-											onClick={() => updateSubtitleBackground(preset.config)}
-											className="flex flex-col text-left px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900/80 hover:bg-neutral-800 hover:border-neutral-700 transition"
-										>
-											<span className="text-xs font-medium text-neutral-100">
-												{preset.name}
-											</span>
-											<span className="text-[10px] text-neutral-400">
-												{preset.desc}
-											</span>
-										</button>
-									))}
-								</div>
-							</div>
-
-							<div className="flex items-center justify-between border-t border-neutral-800/80 pt-2.5">
-								<Label
-									htmlFor="subtitle-background-color"
-									className="text-xs text-neutral-300"
-								>
-									Màu sắc nền
-								</Label>
-								<div className="flex items-center gap-2">
-									<input
-										id="subtitle-background-color"
-										type="color"
-										value={subtitleBackground.color}
-										disabled={isProcessing}
-										onChange={(event) =>
-											updateSubtitleBackground({ color: event.target.value })
-										}
-										className="h-7 w-9 cursor-pointer rounded border border-neutral-700 bg-transparent"
-									/>
-									<span className="font-mono text-[11px] text-neutral-400">
-										{subtitleBackground.color}
-									</span>
-								</div>
-							</div>
-
-							{/* Opacity / Độ đậm che phủ */}
-							<div className="flex flex-col gap-1">
-								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-opacity" className="text-xs text-neutral-300">
-										Độ che phủ (Opacity)
-									</Label>
-									<span className="font-mono text-neutral-400">
-										{subtitleBackground.opacity ?? 95}%
-									</span>
-								</div>
-								<input
-									type="range"
-									className="w-full accent-rose-500"
-									id="subtitle-opacity"
-									aria-label="Độ che phủ"
-									min={0}
-									max={100}
-									step={1}
-									disabled={isProcessing}
-									value={subtitleBackground.opacity ?? 95}
-									onChange={(event) =>
-										updateSubtitleBackground({
-											opacity: Number(event.target.value),
-										})
-									}
-								/>
-								<span className="text-[10px] text-neutral-500">
-									90–100% giúp che sạch chữ và logo gốc phía sau.
-								</span>
-							</div>
-
-							{/* Blur / Nhòe mờ viền */}
-							<div className="flex flex-col gap-1">
-								<div className="flex justify-between text-xs">
-									<Label htmlFor="subtitle-blur" className="text-xs text-neutral-300">
-										Độ nhòe mờ viền (Blur)
-									</Label>
-									<span className="font-mono text-neutral-400">
-										{subtitleBackground.blur ?? 24}px
-									</span>
-								</div>
-								<input
-									type="range"
-									className="w-full accent-rose-500"
-									id="subtitle-blur"
-									aria-label="Độ nhòe mờ viền"
-									min={0}
-									max={60}
-									step={2}
-									disabled={isProcessing}
-									value={subtitleBackground.blur ?? 24}
-									onChange={(event) =>
-										updateSubtitleBackground({
-											blur: Number(event.target.value),
-										})
-									}
-								/>
-								<span className="text-[10px] text-neutral-500">
-									Làm mờ chuyển tiếp viền mềm mại như tính năng xóa logo.
-								</span>
-							</div>
-
-							{/* Corner Radius */}
-							<div className="flex flex-col gap-1">
-								<div className="flex justify-between text-xs">
-									<Label
-										htmlFor="subtitle-corner-radius"
-										className="text-xs text-neutral-300"
-									>
-										Bo tròn góc
-									</Label>
-									<span className="font-mono text-neutral-400">
-										{subtitleBackground.cornerRadius ?? 16}%
-									</span>
-								</div>
-								<input
-									type="range"
-									className="w-full accent-rose-500"
-									id="subtitle-corner-radius"
-									aria-label="Bo tròn góc"
-									min={0}
-									max={50}
-									step={2}
-									disabled={isProcessing}
-									value={subtitleBackground.cornerRadius ?? 16}
-									onChange={(event) =>
-										updateSubtitleBackground({
-											cornerRadius: Number(event.target.value),
-										})
-									}
-								/>
-							</div>
-
-							{/* Padding X */}
-							<div className="flex flex-col gap-1">
-								<div className="flex justify-between text-xs">
-									<Label
-										htmlFor="subtitle-padding-x"
-										className="text-xs text-neutral-300"
-									>
-										Mở rộng nền ngang (Padding X)
-									</Label>
-									<span className="font-mono text-neutral-400">
-										{subtitleBackground.paddingX}px
-									</span>
-								</div>
-								<input
-									type="range"
-									className="w-full accent-rose-500"
-									id="subtitle-padding-x"
-									aria-label="Mở rộng nền ngang"
-									min={0}
-									max={700}
-									step={10}
-									disabled={isProcessing}
-									value={subtitleBackground.paddingX}
-									onChange={(event) =>
-										updateSubtitleBackground({
-											paddingX: Number(event.target.value),
-										})
-									}
-								/>
-								<span className="text-[10px] text-neutral-500">
-									Mở rộng thêm sang 2 bên để che hết các câu chữ gốc dài.
-								</span>
-							</div>
-
-							{/* Padding Y */}
-							<div className="flex flex-col gap-1">
-								<div className="flex justify-between text-xs">
-									<Label
-										htmlFor="subtitle-padding-y"
-										className="text-xs text-neutral-300"
-									>
-										Mở rộng nền dọc (Padding Y)
-									</Label>
-									<span className="font-mono text-neutral-400">
-										{subtitleBackground.paddingY}px
-									</span>
-								</div>
-								<input
-									type="range"
-									className="w-full accent-rose-500"
-									id="subtitle-padding-y"
-									aria-label="Mở rộng nền dọc"
-									min={0}
-									max={300}
-									step={10}
-									disabled={isProcessing}
-									value={subtitleBackground.paddingY}
-									onChange={(event) =>
-										updateSubtitleBackground({
-											paddingY: Number(event.target.value),
-										})
-									}
-								/>
-							</div>
-
-							<div className="flex flex-col gap-2 border-t border-neutral-800/80 pt-2.5">
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									disabled={isProcessing}
-									onClick={() => {
-										updateSubtitleBackground({});
-										toast.success(
-											"Đã đồng bộ nền mờ cho toàn bộ phụ đề trên timeline!",
-										);
-									}}
-									className="w-full text-xs h-7 border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200"
-								>
-									🔄 Đồng bộ nền cho tất cả phụ đề
-								</Button>
-
-								<Button
-									type="button"
-									variant="secondary"
-									size="sm"
-									disabled={isProcessing}
-									onClick={addSubtitleCoverStrip}
-									className="w-full text-xs h-7 bg-neutral-800 hover:bg-neutral-700 text-neutral-200"
-								>
-									✨ Thêm dải mờ che phụ đề gốc suốt video
-								</Button>
 							</div>
 						</div>
+						<input
+							type="range"
+							id="subtitle-font-size"
+							min={2.0}
+							max={6.5}
+							step={0.1}
+							disabled={isProcessing}
+							value={subtitleFontSize}
+							onChange={(e) => updateSubtitleLayout({ fontSize: Number(e.target.value) })}
+							className="w-full accent-amber-400"
+						/>
+						<div className="flex gap-1.5">
+							{[
+								{ label: "Nhỏ (2.8)", size: 2.8 },
+								{ label: "Chuẩn (3.5)", size: 3.5 },
+								{ label: "Lớn (4.2)", size: 4.2 },
+								{ label: "Rất to (5.0)", size: 5.0 },
+							].map((p) => (
+								<button
+									key={p.size}
+									type="button"
+									disabled={isProcessing}
+									onClick={() => updateSubtitleLayout({ fontSize: p.size })}
+									className={cn(
+										"flex-1 py-1 text-[10px] rounded border transition",
+										subtitleFontSize === p.size
+											? "border-amber-500 bg-amber-950/60 text-amber-200 font-semibold"
+											: "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800"
+									)}
+								>
+									{p.label}
+								</button>
+							))}
+						</div>
+					</div>
+
+					{/* 1.1. Số dòng tối đa của phụ đề */}
+					<div className="flex flex-col gap-1.5 border-t border-neutral-800/80 pt-2.5">
+						<div className="flex justify-between items-center text-xs">
+							<Label className="text-xs font-medium text-neutral-300">
+								Số dòng tối đa (Max Lines)
+							</Label>
+							<div className="flex items-center gap-1.5">
+								<span className="text-[11px] text-neutral-400">Nhập:</span>
+								<input
+									type="number"
+									min={1}
+									max={4}
+									value={subtitleMaxLines}
+									disabled={isProcessing}
+									onChange={(e) => {
+										const val = Math.max(1, Math.min(4, parseInt(e.target.value, 10) || 1));
+										updateSubtitleLayout({ maxLines: val });
+									}}
+									className="w-12 h-6 text-center font-mono text-xs font-semibold bg-neutral-900 border border-neutral-700 rounded text-amber-300 focus:outline-none focus:border-amber-400"
+								/>
+								<span className="text-xs font-medium text-amber-300">dòng</span>
+							</div>
+						</div>
+						<div className="flex gap-1.5">
+							{[
+								{ label: "1 dòng (Đều đẹp)", lines: 1 },
+								{ label: "2 dòng (Chuẩn)", lines: 2 },
+								{ label: "3 dòng (Dài)", lines: 3 },
+							].map((p) => (
+								<button
+									key={p.lines}
+									type="button"
+									disabled={isProcessing}
+									onClick={() => updateSubtitleLayout({ maxLines: p.lines })}
+									className={cn(
+										"flex-1 py-1 text-[10px] rounded border transition",
+										subtitleMaxLines === p.lines
+											? "border-amber-500 bg-amber-950/60 text-amber-200 font-semibold"
+											: "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800",
+									)}
+								>
+									{p.label}
+								</button>
+							))}
+						</div>
+						<p className="text-[10px] text-neutral-500">
+							{subtitleMaxLines === 1
+								? "Mọi câu phụ đề đều chỉ 1 dòng duy nhất, phông chữ đồng nhất 100% không bị khác cỡ."
+								: subtitleMaxLines === 2
+									? "Phụ đề ngắt tối đa 2 dòng cân đối, phông chữ giữ nguyên kích thước không bị lệch."
+									: "Cho phép phụ đề ngắt tới 3 dòng khi giải thích nội dung dài."}
+						</p>
+					</div>
+
+					{/* 2. Vị trí dọc khung phụ đề (Top / Bottom - Lên / Xuống) */}
+					<div className="flex flex-col gap-1.5 border-t border-neutral-800/80 pt-2.5">
+						<div className="flex justify-between items-center text-xs">
+							<Label htmlFor="subtitle-pos-y" className="text-xs font-medium text-neutral-300">
+								Vị trí dọc (Lên ⬆ / Xuống ⬇)
+							</Label>
+							<span className="font-mono text-[11px] text-neutral-400">
+								Cách đáy: {Math.max(0, Math.round(canvasSize.height / 2 - subtitlePositionY))}px
+							</span>
+						</div>
+						<p className="text-[10px] text-neutral-400">
+							Dịch cả dải che mờ & phụ đề lên/xuống (dải mờ nổi độc lập, không bắt buộc kéo dài từ đáy).
+						</p>
+						<input
+							type="range"
+							id="subtitle-pos-y"
+							min={Math.round(-canvasSize.height * 0.35)}
+							max={Math.round(canvasSize.height * 0.46)}
+							step={5}
+							disabled={isProcessing}
+							value={subtitlePositionY}
+							onChange={(e) => updateSubtitleLayout({ positionY: Number(e.target.value) })}
+							className="w-full accent-amber-400"
+						/>
+						<div className="flex gap-1.5">
+							<button
+								type="button"
+								disabled={isProcessing}
+								onClick={() => updateSubtitleLayout({ positionY: Math.round(canvasSize.height * 0.46) })}
+								className="flex-1 py-1 text-[10px] rounded border border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800 text-neutral-300 transition"
+							>
+								⬇ Sát đáy (~75px)
+							</button>
+							<button
+								type="button"
+								disabled={isProcessing}
+								onClick={() => updateSubtitleLayout({ positionY: Math.round(canvasSize.height * 0.44) })}
+								className={cn(
+									"flex-1 py-1 text-[10px] rounded border transition",
+									Math.abs(subtitlePositionY - defaultBaselineY) < 10
+										? "border-amber-500 bg-amber-950/60 text-amber-200 font-semibold"
+										: "border-neutral-800 bg-neutral-900/60 text-neutral-300 hover:bg-neutral-800"
+								)}
+							>
+								🎯 Chuẩn (~115px)
+							</button>
+							<button
+								type="button"
+								disabled={isProcessing}
+								onClick={() => updateSubtitleLayout({ positionY: Math.round(canvasSize.height * 0.38) })}
+								className="flex-1 py-1 text-[10px] rounded border border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800 text-neutral-300 transition"
+							>
+								⬆ Nâng cao (~230px)
+							</button>
+						</div>
+					</div>
+
+					{/* 3. Vị trí ngang (Left / Right - Trái / Phải) */}
+					<div className="flex flex-col gap-1.5 border-t border-neutral-800/80 pt-2.5">
+						<div className="flex justify-between items-center text-xs">
+							<Label htmlFor="subtitle-pos-x" className="text-xs font-medium text-neutral-300">
+								Vị trí ngang (Trái ⬅ / Phải ➡)
+							</Label>
+							<div className="flex items-center gap-2">
+								<span className="font-mono text-[11px] text-neutral-400">
+									{subtitlePositionX === 0 ? "Chính giữa (0)" : `${subtitlePositionX > 0 ? "+" : ""}${subtitlePositionX}px`}
+								</span>
+								{subtitlePositionX !== 0 && (
+									<button
+										type="button"
+										onClick={() => updateSubtitleLayout({ positionX: 0 })}
+										className="text-[10px] text-amber-400 hover:underline"
+									>
+										Căn giữa
+									</button>
+								)}
+							</div>
+						</div>
+						<input
+							type="range"
+							id="subtitle-pos-x"
+							min={-300}
+							max={300}
+							step={5}
+							disabled={isProcessing}
+							value={subtitlePositionX}
+							onChange={(e) => updateSubtitleLayout({ positionX: Number(e.target.value) })}
+							className="w-full accent-amber-400"
+						/>
+					</div>
+
+					{/* 4. Khung dải nền mờ (Chiều rộng 2 bên, Chiều cao & Độ nhòe) */}
+					{subtitleBackground.enabled && (
+						<div className="flex flex-col gap-2 border-t border-neutral-800/80 pt-2.5">
+							<div className="flex justify-between items-center text-xs">
+								<Label htmlFor="subtitle-strip-width" className="text-xs font-medium text-neutral-300">
+									Chiều rộng 2 bên dải mờ
+								</Label>
+								<span className="font-mono text-neutral-400">
+									{subtitleBackground.stripWidth ?? 88}%
+								</span>
+							</div>
+							<input
+								type="range"
+								id="subtitle-strip-width"
+								min={25}
+								max={100}
+								step={1}
+								disabled={isProcessing}
+								value={subtitleBackground.stripWidth ?? 88}
+								onChange={(e) =>
+									updateSubtitleLayout({
+										background: { stripWidth: Number(e.target.value) },
+									})
+								}
+								className="w-full accent-amber-400"
+							/>
+							<div className="flex gap-1.5">
+								{[
+									{ label: "Gọn (65%)", width: 65 },
+									{ label: "Chuẩn (88%)", width: 88 },
+									{ label: "Full ngang (100%)", width: 100 },
+								].map((p) => (
+									<button
+										key={p.width}
+										type="button"
+										disabled={isProcessing}
+										onClick={() =>
+											updateSubtitleLayout({
+												background: { stripWidth: p.width },
+											})
+										}
+										className={cn(
+											"flex-1 py-1 text-[10px] rounded border transition",
+											(subtitleBackground.stripWidth ?? 88) === p.width
+												? "border-amber-500 bg-amber-950/60 text-amber-200 font-semibold"
+												: "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800",
+										)}
+									>
+										{p.label}
+									</button>
+								))}
+							</div>
+
+							<div className="flex justify-between items-center text-xs mt-1">
+								<Label htmlFor="subtitle-strip-height" className="text-xs font-medium text-neutral-300">
+									Chiều cao dải che mờ (từ tâm)
+								</Label>
+								<span className="font-mono text-neutral-400">
+									{subtitleBackground.stripHeight ?? 12}%
+								</span>
+							</div>
+							<input
+								type="range"
+								id="subtitle-strip-height"
+								min={5}
+								max={35}
+								step={1}
+								disabled={isProcessing}
+								value={subtitleBackground.stripHeight ?? 12}
+								onChange={(e) =>
+									updateSubtitleLayout({
+										background: { stripHeight: Number(e.target.value) },
+									})
+								}
+								className="w-full accent-amber-400"
+							/>
+							<div className="flex justify-between items-center text-[10px] text-neutral-500">
+								<span>5% (1 dòng nhỏ)</span>
+								<span>12% (Chuẩn)</span>
+								<span>25% (2 dòng chữ to)</span>
+							</div>
+
+							<div className="flex justify-between items-center text-xs mt-1">
+								<Label htmlFor="subtitle-blur" className="text-xs font-medium text-neutral-300">
+									Độ nhòe mờ video (Blur)
+								</Label>
+								<span className="font-mono text-neutral-400">
+									{subtitleBackground.blur ?? 30}px
+								</span>
+							</div>
+							<input
+								type="range"
+								id="subtitle-blur"
+								min={10}
+								max={50}
+								step={2}
+								disabled={isProcessing}
+								value={subtitleBackground.blur ?? 30}
+								onChange={(e) =>
+									updateSubtitleLayout({
+										background: { blur: Number(e.target.value) },
+									})
+								}
+								className="w-full accent-amber-400"
+							/>
+						</div>
 					)}
+
+					{/* 5. Tùy chọn màu chữ */}
+					<div className="flex items-center justify-between border-t border-neutral-800/80 pt-2.5">
+						<span className="text-xs font-medium text-neutral-300">Màu chữ</span>
+						<div className="flex items-center gap-1.5">
+							{[
+								{ label: "Vàng", color: "#FFFF00" },
+								{ label: "Trắng", color: "#FFFFFF" },
+								{ label: "Xanh lơ", color: "#00FFFF" },
+							].map((swatch) => (
+								<button
+									key={swatch.color}
+									type="button"
+									disabled={isProcessing}
+									onClick={() => updateSubtitleLayout({ textColor: swatch.color })}
+									className={cn(
+										"flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition",
+										subtitleTextColor.toUpperCase() === swatch.color
+											? "border-amber-400 bg-neutral-800 font-semibold text-white"
+											: "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800"
+									)}
+								>
+									<span
+										className="size-2.5 rounded-full border border-black/40"
+										style={{ backgroundColor: swatch.color }}
+									/>
+									{swatch.label}
+								</button>
+							))}
+						</div>
+					</div>
+
+					{/* Nút đồng bộ và reset */}
+					<div className="flex flex-col gap-1.5 pt-1">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={isProcessing}
+							onClick={() => {
+								updateSubtitleLayout({
+									fontSize: 3.5,
+									positionY: defaultBaselineY,
+									positionX: 0,
+									textColor: "#FFFF00",
+									background: {
+										enabled: true,
+										backdropBlur: true,
+										fullWidth: true,
+										stripHeight: 12,
+										stripWidth: 88,
+										color: "#000000",
+										opacity: 0,
+										blur: 30,
+										cornerRadius: 12,
+										paddingX: 0,
+										paddingY: 0,
+									},
+								});
+								toast.success("Đã khôi phục chuẩn mặc định: Chữ vàng + nền mờ!");
+							}}
+							className="w-full text-xs h-7 border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-300"
+						>
+							<RefreshCw className="mr-1.5 size-3" />
+							Khôi phục chuẩn mặc định
+						</Button>
+
+						<Button
+							type="button"
+							variant="secondary"
+							size="sm"
+							disabled={isProcessing}
+							onClick={addSubtitleCoverStrip}
+							className="w-full text-xs h-7 bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+						>
+							✨ Thêm dải mờ che phụ đề gốc riêng
+						</Button>
+					</div>
 				</div>
-				</details>
 			</div>
 
 			{/* Subtitle Preview Section */}
@@ -1357,15 +1568,15 @@ export function VietnameseAiPanel({ projectId }: Props) {
 					<div className="flex flex-col gap-2">
 						<div className="flex items-center justify-between">
 							<span className="text-xs font-semibold text-neutral-200">
-								{mode === "narration" ? "Kịch bản thuyết minh" : "Xem trước phụ đề"}
+								Xem trước phụ đề
 							</span>
 							<span className="text-[10px] bg-rose-500/15 text-rose-300 px-1.5 py-0.5 rounded border border-rose-500/20 font-mono">
-								{mode === "narration" ? "AI hình ảnh" : "1-2 dòng/câu"}
+								Tối đa {subtitleMaxLines} dòng/câu
 							</span>
 						</div>
-						{mode === "dubbing" && <p className="text-[11px] text-neutral-400 leading-relaxed">
-							Tự động tách câu thành các đoạn ngắn 1-2 dòng chuẩn TikTok / Reels. Bạn có thể xem trước và chỉnh sửa lời thoại trước khi AI thu âm.
-						</p>}
+						<p className="text-[11px] text-neutral-400 leading-relaxed">
+							Tự động tách câu thành các đoạn ngắn tối đa {subtitleMaxLines} dòng chuẩn TikTok / Reels. Bạn có thể xem trước và chỉnh sửa lời thoại trước khi AI thu âm.
+						</p>
 						<Button
 							type="button"
 							variant="outline"
@@ -1374,29 +1585,61 @@ export function VietnameseAiPanel({ projectId }: Props) {
 							className="mt-1 w-full border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-xs py-2 h-8"
 						>
 							{isPreviewing ? <Loader2 className="size-3.5 animate-spin" /> : <ScanEye className="size-3.5" />}
-							{isPreviewing ? "Đang phân tích..." : mode === "narration" ? "Phân tích video & Viết lời" : "Xem trước kịch bản phụ đề"}
+							{isPreviewing ? "Đang phân tích..." : "Xem trước kịch bản phụ đề"}
 						</Button>
 					</div>
 				) : (
 					<div className="flex flex-col gap-2.5">
-						<div className="flex items-center justify-between">
+						<div className="flex items-center justify-between flex-wrap gap-2">
 							<div className="flex items-center gap-2">
 								<span className="text-xs font-semibold text-neutral-200">
-									{mode === "narration" ? "Thuyết minh" : "Phụ đề"} ({previewCues.length} đoạn)
+									Phụ đề ({previewCues.length} đoạn)
 								</span>
-								<span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/40 px-1.5 py-0.5 rounded">
-									{mode === "narration" ? "Chờ duyệt" : "Tối đa 1-2 dòng"}
-								</span>
+								<div className="flex items-center gap-1 bg-neutral-900/80 border border-neutral-800 px-1.5 py-0.5 rounded text-[11px] text-neutral-300">
+									<span className="text-neutral-400 text-[10px]">Tối đa</span>
+									<input
+										type="number"
+										min={1}
+										max={4}
+										value={subtitleMaxLines}
+										disabled={isProcessing || isPreviewing}
+										onChange={(e) => {
+											const val = Math.max(1, Math.min(4, parseInt(e.target.value, 10) || 1));
+											updateSubtitleLayout({ maxLines: val });
+										}}
+										className="w-8 h-4 text-center font-mono font-bold bg-neutral-950 border border-neutral-700 rounded text-amber-300 focus:outline-none focus:border-amber-400 text-[11px]"
+									/>
+									<span className="text-amber-300 text-[10px]">dòng</span>
+								</div>
+								<div className="flex items-center gap-1">
+									{[1, 2].map((lines) => (
+										<button
+											key={lines}
+											type="button"
+											disabled={isProcessing || isPreviewing}
+											onClick={() => updateSubtitleLayout({ maxLines: lines })}
+											className={cn(
+												"px-1.5 py-0.5 rounded text-[10px] border transition",
+												subtitleMaxLines === lines
+													? "bg-amber-500/20 text-amber-300 border-amber-500/50 font-semibold"
+													: "bg-neutral-900/60 text-neutral-400 border-neutral-800 hover:bg-neutral-800",
+											)}
+										>
+											{lines} dòng
+										</button>
+									))}
+								</div>
 							</div>
 							<button
 								type="button"
-								title="Tạo lại kịch bản"
+								title="Phân tách lại kịch bản theo số dòng đã chọn"
 								aria-label="Tạo lại kịch bản"
 								disabled={isProcessing || isPreviewing}
-								onClick={handlePreview}
-								className="text-[11px] text-rose-400 hover:text-rose-300 hover:underline"
+								onClick={() => handlePreview(true)}
+								className="flex items-center gap-1 px-2 py-0.5 text-[10px] bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded border border-neutral-700 transition"
 							>
-								<RefreshCw className={cn("size-3.5", isPreviewing && "animate-spin")} aria-label="Tạo lại kịch bản" />
+								<RefreshCw className={cn("size-3", isPreviewing && "animate-spin")} aria-label="Tạo lại kịch bản" />
+								<span>Tách lại kịch bản</span>
 							</button>
 						</div>
 
@@ -1409,16 +1652,9 @@ export function VietnameseAiPanel({ projectId }: Props) {
 										className="flex flex-col gap-1 rounded border border-neutral-800 bg-neutral-900/90 p-2 text-xs"
 									>
 										<div className="flex items-center justify-between text-[10px] text-neutral-400">
-											{mode === "narration" ? <div className="flex min-w-0 items-center gap-1">
-												<input type="number" min={0} step={0.1} value={cue.start} disabled={isProcessing || isPreviewing} aria-label={`Bắt đầu đoạn ${index + 1}`}
-													onChange={(event) => updateCueTime(index, "start", event.target.valueAsNumber)} className="w-16 min-w-0 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5" />
-												<span>-</span>
-												<input type="number" min={0} step={0.1} value={cue.end} disabled={isProcessing || isPreviewing} aria-label={`Kết thúc đoạn ${index + 1}`}
-													onChange={(event) => updateCueTime(index, "end", event.target.valueAsNumber)} className="w-16 min-w-0 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5" />
-												<span>s</span>
-											</div> : <span className="font-mono bg-neutral-800 px-1.5 py-0.5 rounded">
+											<span className="font-mono bg-neutral-800 px-1.5 py-0.5 rounded">
 												{cue.start.toFixed(1)}s ➔ {cue.end.toFixed(1)}s
-											</span>}
+											</span>
 											<div className="flex items-center gap-1.5">
 												<span
 													className={`px-1.5 py-0.5 rounded font-mono ${
@@ -1464,10 +1700,10 @@ export function VietnameseAiPanel({ projectId }: Props) {
 								onClick={addCue}
 								className="text-xs text-neutral-400 hover:text-neutral-200 h-7 px-2"
 							>
-									<Plus className="size-3.5" />{mode === "narration" ? "Thêm đoạn" : "Thêm câu phụ đề"}
+								<Plus className="size-3.5" />Thêm câu phụ đề
 							</Button>
 							<span className="text-[10px] text-neutral-500">
-								{mode === "narration" ? "Mốc thời gian: giây" : "Chuẩn 1-2 dòng TikTok"}
+								Chuẩn tối đa {subtitleMaxLines} dòng TikTok
 							</span>
 						</div>
 					</div>
@@ -1479,15 +1715,15 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				<div className="flex flex-col gap-2 p-3 bg-emerald-950/40 rounded-lg border border-emerald-800/60 text-xs">
 					<div className="flex items-center justify-between text-emerald-400 font-semibold">
 						<span className="flex items-center gap-1.5">
-							<Mic className="size-3.5" />{mode === "narration" ? "Thuyết minh đã sẵn sàng" : "Bản Việt hóa đã sẵn sàng"}
+							<Mic className="size-3.5" />Bản Việt hóa đã sẵn sàng
 						</span>
 						<span className="text-[10px] bg-emerald-900/60 text-emerald-300 px-1.5 py-0.5 rounded font-mono">
 							Đã tạo xong
 						</span>
 					</div>
-					{mode === "dubbing" && <p className="text-[11px] text-neutral-300 leading-relaxed">
+					<p className="text-[11px] text-neutral-300 leading-relaxed">
 						Video này đã có nhạc nền tách tiếng và giọng đọc AI hoàn tất trên máy chủ. Bạn có thể gắn thẳng vào timeline ngay lập tức!
-					</p>}
+					</p>
 					<Button
 						type="button"
 						size="sm"
@@ -1513,15 +1749,13 @@ export function VietnameseAiPanel({ projectId }: Props) {
 
 			{/* Primary Action Button */}
 			<Button
-				disabled={isProcessing || isPreviewing || (mode === "narration" && hasPreviewed && !previewCues.length)}
-				onClick={() => mode === "narration" && !hasPreviewed ? handlePreview() : handleLocalize(Boolean(existingLocalized))}
+				disabled={isProcessing || isPreviewing}
+				onClick={() => handleLocalize(Boolean(existingLocalized))}
 				className="w-full bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white font-medium text-xs py-5 shadow-lg shadow-rose-900/20"
 			>
 				<HugeiconsIcon icon={SparklesIcon} className="size-4 mr-2" />
 				{isProcessing
 					? "Đang xử lý..."
-					: mode === "narration"
-						? isPreviewing ? "Đang phân tích..." : hasPreviewed ? "Tạo giọng & Gắn timeline" : "Phân tích video & Viết lời"
 					: existingLocalized
 						? "🔄 Tạo lại bản Việt hóa mới"
 						: hasPreviewed
@@ -1543,7 +1777,6 @@ export function VietnameseAiPanel({ projectId }: Props) {
 				<span className="text-xs text-neutral-400">Export video</span>
 				<ExportButton />
 			</div>
-			</>}
 		</div>
 	);
 }

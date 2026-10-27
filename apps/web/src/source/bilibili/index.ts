@@ -9,6 +9,14 @@ import { fetchBilibiliSearch } from "./search-transport";
 import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
+import { publishDownloadedFile } from "./download-files";
+
+// Route modules can reload independently in development. Keep the filesystem
+// writer shared across provider instances and hot reloads, keyed by output path.
+const runtime = globalThis as typeof globalThis & {
+	__bilibiliImports?: Map<string, Promise<ImportedVideo>>;
+};
+const importsInFlight = (runtime.__bilibiliImports ??= new Map());
 
 const BILIBILI_HEADERS = {
 	Referer: "https://www.bilibili.com/",
@@ -362,8 +370,63 @@ export class BilibiliProvider implements VideoSourceProvider {
 	}
 
 	async importVideo(id: string): Promise<ImportedVideo> {
+		const output = path.resolve(this.downloadDir, `${id}.full.mp4`);
+		const key = process.platform === "win32" ? output.toLowerCase() : output;
+		let request = importsInFlight.get(key);
+		if (!request) {
+			request = this.downloadVideo(id);
+			importsInFlight.set(key, request);
+		}
+		try {
+			return await request;
+		} finally {
+			if (importsInFlight.get(key) === request) importsInFlight.delete(key);
+		}
+	}
+
+	private async readImportedFile({ id, mediaPath, manifestPath, targetFile, requireSize = false }: {
+		id: string;
+		mediaPath: string;
+		manifestPath: string;
+		targetFile: string;
+		requireSize?: boolean;
+	}): Promise<ImportedVideo | undefined> {
+		try {
+			const stat = await fs.stat(mediaPath);
+			if (stat.isFile() && stat.size >= (requireSize ? 1 : 50000)) {
+				const cached: ImportedVideo & { downloadedSize?: number } = JSON.parse(
+					await fs.readFile(manifestPath, "utf8"),
+				);
+				if (
+					(!requireSize || cached.downloadedSize === stat.size) &&
+					cached.provider === this.name && cached.sourceId === id &&
+					cached.fullVideo === true && cached.localMediaPath === targetFile &&
+					typeof cached.title === "string" && typeof cached.thumbnail === "string" &&
+					typeof cached.sourceUrl === "string" && typeof cached.createdAt === "string" &&
+					Number.isFinite(cached.duration) && cached.duration > 0
+				) {
+					const { downloadedSize: _downloadedSize, ...imported } = cached;
+					return imported;
+				}
+			}
+		} catch {
+			// Older downloads without a valid manifest still refresh their metadata.
+		}
+	}
+
+	private async downloadVideo(id: string): Promise<ImportedVideo> {
 		await fs.mkdir(this.downloadDir, { recursive: true });
 		const targetFile = path.join(this.downloadDir, `${id}.full.mp4`);
+		const downloadFile = path.join(this.downloadDir, `${id}.full.download.mp4`);
+		const completedFile = `${downloadFile}.complete.json`;
+		// This marker is written only after the downloader exits successfully.
+		// Never promote an unmarked partial download based only on its size.
+		const completed = await this.readImportedFile({ id, mediaPath: downloadFile, manifestPath: completedFile, targetFile, requireSize: true });
+		if (completed) {
+			await publishDownloadedFile({ temporaryPath: downloadFile, finalPath: targetFile });
+			await fs.rm(completedFile, { force: true }).catch(() => {});
+			return completed;
+		}
 
 		let meta: VideoMetadata;
 		let formats: VideoFormat[] = [];
@@ -380,6 +443,17 @@ export class BilibiliProvider implements VideoSourceProvider {
 			}
 			meta = await this.getMetadata(id);
 		}
+		const imported: ImportedVideo = {
+			fullVideo: true,
+			provider: "bilibili",
+			sourceId: id,
+			sourceUrl: `https://www.bilibili.com/video/${id}`,
+			title: meta.title,
+			thumbnail: meta.thumbnail,
+			duration: meta.duration,
+			localMediaPath: targetFile,
+			createdAt: new Date().toISOString(),
+		};
 
 		let needsDownload = false;
 		try {
@@ -390,10 +464,6 @@ export class BilibiliProvider implements VideoSourceProvider {
 		}
 
 		if (needsDownload) {
-			const downloadFile = path.join(
-				this.downloadDir,
-				`${id}.full.download.mp4`,
-			);
 			const videoUrl = `https://www.bilibili.com/video/${id}`;
 
 			let downloadedSuccess = false;
@@ -489,20 +559,12 @@ export class BilibiliProvider implements VideoSourceProvider {
 
 			const downloaded = await fs.stat(downloadFile);
 			if (!downloaded.size) throw new Error("Downloaded video is empty");
-			await fs.rename(downloadFile, targetFile);
+			await fs.writeFile(completedFile, JSON.stringify({ ...imported, downloadedSize: downloaded.size }));
+			await publishDownloadedFile({ temporaryPath: downloadFile, finalPath: targetFile });
+			await fs.rm(completedFile, { force: true }).catch(() => {});
 		}
 
-		return {
-			fullVideo: true,
-			provider: "bilibili",
-			sourceId: id,
-			sourceUrl: `https://www.bilibili.com/video/${id}`,
-			title: meta.title,
-			thumbnail: meta.thumbnail,
-			duration: meta.duration,
-			localMediaPath: targetFile,
-			createdAt: new Date().toISOString(),
-		};
+		return imported;
 	}
 
 	private parseDuration(durStr?: string): number {

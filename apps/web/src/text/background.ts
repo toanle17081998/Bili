@@ -12,6 +12,8 @@ export interface TextBackground {
 	blur?: number;
 	fullWidth?: boolean;
 	backdropBlur?: boolean;
-	/** Bottom strip height as a percentage of the video canvas. */
+	/** Blur strip height as a percentage of the video canvas height. */
 	stripHeight?: number;
+	/** Blur strip width as a percentage of the video canvas width. */
+	stripWidth?: number;
 }

@@ -2,6 +2,7 @@ export interface SplitOptions {
 	maxCharsPerCue?: number;
 	maxCharsPerLine?: number;
 	minDuration?: number;
+	maxLines?: number;
 }
 
 export interface SplitSubtitleCue {
@@ -21,8 +22,9 @@ export function splitIntoShortSubtitles(
 	options: SplitOptions = {},
 ): SplitSubtitleCue[] {
 	const {
-		maxCharsPerCue = 38,
+		maxLines = 2,
 		maxCharsPerLine = 22,
+		maxCharsPerCue = maxLines === 1 ? 22 : maxLines * 19,
 		minDuration = 0.7,
 	} = options;
 
@@ -127,24 +129,30 @@ export function splitIntoShortSubtitles(
 			curEnd = Number((curStart + minDuration).toFixed(2));
 		}
 
-		// Ensure strictly 1 or 2 lines
+		// Ensure strictly formatted according to maxLines
 		let formattedText = chunk;
-		if (chunk.length > maxCharsPerLine && !chunk.includes("\n")) {
+		if (maxLines === 1) {
+			formattedText = chunk.replace(/\n/g, " ").trim();
+		} else if (chunk.length > maxCharsPerLine && !chunk.includes("\n")) {
 			const words = chunk.split(" ");
-			let bestIdx = Math.floor(words.length / 2);
-			let minDiff = Infinity;
-			let curLen = 0;
-			const target = chunk.length / 2;
-
-			for (let w = 0; w < words.length - 1; w++) {
-				curLen += words[w].length + 1;
-				const diff = Math.abs(curLen - target);
-				if (diff < minDiff) {
-					minDiff = diff;
-					bestIdx = w + 1;
+			if (words.length > 1) {
+				const lineTarget = Math.min(maxLines, Math.max(2, Math.ceil(chunk.length / maxCharsPerLine)));
+				const charsPerPart = Math.ceil(chunk.length / lineTarget);
+				const parts: string[] = [];
+				let curPart = "";
+				for (const w of words) {
+					if (!curPart) {
+						curPart = w;
+					} else if (curPart.length + 1 + w.length <= charsPerPart || parts.length >= lineTarget - 1) {
+						curPart += ` ${w}`;
+					} else {
+						parts.push(curPart);
+						curPart = w;
+					}
 				}
+				if (curPart) parts.push(curPart);
+				formattedText = parts.join("\n");
 			}
-			formattedText = `${words.slice(0, bestIdx).join(" ")}\n${words.slice(bestIdx).join(" ")}`;
 		}
 
 		cues.push({

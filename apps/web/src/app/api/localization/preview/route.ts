@@ -11,6 +11,7 @@ import { readLocalizationRequest } from "@/localization/http";
 const requestSchema = z.object({
 	projectId: z.string().regex(/^[a-zA-Z0-9_-]+$/), videoPath: z.string().optional(),
 	mode: z.enum(["dubbing", "narration"]).default("dubbing"), notes: z.string().max(1000).optional(),
+	maxLines: z.number().int().min(1).max(5).default(2).optional(),
 });
 const narrationJobs = new Map<string, ReturnType<typeof generateNarrationPreview>>();
 
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
 	try {
 		const parsed = requestSchema.safeParse(await readLocalizationRequest(request));
 		if (!parsed.success) return NextResponse.json({ success: false, error: "Yêu cầu phân tích video không hợp lệ." }, { status: 400 });
-		const { projectId, videoPath, mode, notes } = parsed.data;
+		const { projectId, videoPath, mode, notes, maxLines } = parsed.data;
 		if (mode === "narration") {
 			const source = await resolveNarrationSource(projectId, videoPath || "");
 			const key = JSON.stringify([projectId, source, notes ?? ""]);
@@ -66,6 +67,7 @@ export async function POST(request: NextRequest) {
 			projectId,
 			videoPath: targetVideoPath,
 			workDir,
+			maxLines: maxLines ?? 2,
 		});
 
 		return NextResponse.json({

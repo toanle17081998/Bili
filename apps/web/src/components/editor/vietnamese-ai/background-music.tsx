@@ -49,7 +49,13 @@ export function BackgroundMusicSection({ projectId, disabled }: { projectId: str
 		.map((element) => ({ trackId: track.id, element }))) ?? [];
 	const [file, setFile] = useState<File | null>(null);
 	const [assetId, setAssetId] = useState("");
-	const [volume, setVolume] = useState(15);
+	const [volume, setVolume] = useState(() => {
+		if (typeof window !== "undefined") {
+			const saved = Number(localStorage.getItem("ai-global-bgm-volume"));
+			if (Number.isFinite(saved) && saved >= 0 && saved <= 100) return saved;
+		}
+		return 15;
+	});
 	const [isAdding, setIsAdding] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const audioRef = useRef<HTMLAudioElement>(null);
@@ -58,6 +64,11 @@ export function BackgroundMusicSection({ projectId, disabled }: { projectId: str
 	const busy = disabled || isAdding;
 	const applied = musicElements[0]?.element;
 	const musicVolume = applied ? isElementMuted({ element: applied }) ? 0 : Math.min(100, Math.round(dBToLinear(getElementVolume({ element: applied })) * 100)) : volume;
+	useEffect(() => {
+		if (applied && typeof window !== "undefined" && localStorage.getItem("ai-global-bgm-volume") === null) {
+			localStorage.setItem("ai-global-bgm-volume", String(musicVolume));
+		}
+	}, [applied, musicVolume]);
 
 	useEffect(function prepareMusicPreview() {
 		const audio = audioRef.current;
@@ -86,6 +97,9 @@ export function BackgroundMusicSection({ projectId, disabled }: { projectId: str
 
 	const changeVolume = (percent: number) => {
 		setVolume(percent);
+		if (typeof window !== "undefined") {
+			localStorage.setItem("ai-global-bgm-volume", String(percent));
+		}
 		if (audioRef.current) audioRef.current.volume = percent / 100;
 		if (musicElements.length) editor.timeline.updateElements({
 			updates: musicElements.map(({ trackId, element }) => ({

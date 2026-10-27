@@ -313,40 +313,74 @@ function collectTextNode({
 					textures.get(item.textureId)?.kind === "external",
 			);
 		if (sourceLayer?.type === "layer" && !sourceLayer.mask) {
-			const texture = textures.get(sourceLayer.textureId)!;
-			const stripTop =
-				height *
-				(1 - Math.max(5, Math.min(50, background.stripHeight ?? 22)) / 100);
-			const visualTop =
-				sourceLayer.transform.centerY - sourceLayer.transform.height / 2;
-			const top = Math.max(
-				0,
-				Math.min(
-					texture.height,
-					((stripTop - visualTop) / sourceLayer.transform.height) *
-						texture.height,
-				),
+			const centerX =
+				node.resolved.transform.position.x + node.params.canvasCenter.x;
+			const centerY =
+				node.resolved.transform.position.y + node.params.canvasCenter.y;
+			const stripWidthPct = Math.max(
+				15,
+				Math.min(100, background.stripWidth ?? 88),
 			);
+			const stripHeightPct = Math.max(
+				4,
+				Math.min(80, background.stripHeight ?? 12),
+			);
+			const stripWidthPx = (width * stripWidthPct) / 100;
+			const stripHeightPx = (height * stripHeightPct) / 100;
+			const stripLeft = centerX - stripWidthPx / 2;
+			const stripTop = centerY - stripHeightPx / 2;
+			const cornerRadius =
+				stripWidthPct < 100
+					? ((background.cornerRadius ?? 12) *
+							Math.min(stripWidthPx, stripHeightPx)) /
+						200
+					: 0;
 			const maskId = `${path}:subtitle-backdrop-mask`;
+			const featherPx = Math.min(
+				16,
+				Math.min(stripWidthPx, stripHeightPx) * 0.15,
+			);
 			textures.set(maskId, {
 				kind: "rendered",
 				id: maskId,
-				contentHash: `${texture.width}:${texture.height}:${top}`,
-				width: texture.width,
-				height: texture.height,
+				contentHash: `${width}:${height}:${stripLeft}:${stripTop}:${stripWidthPx}:${stripHeightPx}:${cornerRadius}:${featherPx}`,
+				width,
+				height,
 				draw: (ctx) => {
 					ctx.fillStyle = "white";
-					ctx.fillRect(0, top, texture.width, texture.height - top);
+					ctx.shadowColor = "white";
+					ctx.shadowBlur = featherPx;
+					ctx.beginPath();
+					if (cornerRadius > 0) {
+						ctx.roundRect(
+							stripLeft,
+							stripTop,
+							stripWidthPx,
+							stripHeightPx,
+							cornerRadius,
+						);
+					} else {
+						ctx.rect(stripLeft, stripTop, stripWidthPx, stripHeightPx);
+					}
+					ctx.fill();
 				},
 			});
-			const sigma = ((background.blur ?? 24) * texture.height) / 1080;
+			// Keep sigma clamped to <= 12 so Gaussian blur only runs 1 iteration (2 fast passes)
+			// instead of up to 8 passes that thrash GPU memory allocation.
+			const sigma = Math.min(
+				12,
+				Math.max(2, ((background.blur ?? 24) * height) / 2160),
+			);
 			items.push({
 				...sourceLayer,
 				effectPassGroups: [
 					...sourceLayer.effectPassGroups,
 					buildGaussianBlurPasses({ sigmaX: sigma, sigmaY: sigma }),
 				],
-				mask: { textureId: maskId, feather: sigma, inverted: false },
+				// Passing feather: 0 prevents the Rust compositor from executing the heavy 24-pass
+				// Jump Flooding Algorithm (JFA) on the GPU every frame.
+				// Soft edges are already rendered analytically into the cached mask texture via shadowBlur.
+				mask: { textureId: maskId, feather: 0, inverted: false },
 			});
 		}
 	}

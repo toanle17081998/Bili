@@ -41,24 +41,53 @@ export function renderTextToContext({
 	const y = resolved.transform.position.y + node.params.canvasCenter.y;
 	const baseline = node.params.textBaseline ?? "middle";
 	const background = resolved.measuredText.resolvedBackground;
-	if (background.enabled && background.fullWidth) {
-		// Draw in canvas coordinates, independently of caption width/transforms.
-		const width = ctx.canvas.width;
-		const height = ctx.canvas.height;
-		const stripHeight =
-			(height * Math.max(5, Math.min(50, background.stripHeight ?? 22))) / 100;
+	const width = ctx.canvas.width;
+	const height = ctx.canvas.height;
+	const stripWidthPct = Math.max(
+		15,
+		Math.min(100, background.stripWidth ?? 88),
+	);
+	const stripHeightPct = Math.max(
+		4,
+		Math.min(80, background.stripHeight ?? 12),
+	);
+	const stripWidthPx = (width * stripWidthPct) / 100;
+	const stripHeightPx = (height * stripHeightPct) / 100;
+
+	if (
+		background.enabled &&
+		background.fullWidth &&
+		resolved.backgroundColor &&
+		resolved.backgroundColor !== "transparent" &&
+		!/,\s*0(\.0+)?\)$/.test(resolved.backgroundColor)
+	) {
+		// Draw the floating strip centered on (x, y) rather than anchored to bottom or full width.
+		const stripLeft = x - stripWidthPx / 2;
+		const stripTop = y - stripHeightPx / 2;
 		const blur = (Math.max(0, background.blur ?? 0) * height) / 1080;
+		const cornerRadius =
+			stripWidthPct < 100
+				? ((background.cornerRadius ?? 12) *
+						Math.min(stripWidthPx, stripHeightPx)) /
+					200
+				: 0;
 		ctx.save();
 		ctx.fillStyle = resolved.backgroundColor;
 		ctx.shadowColor = resolved.backgroundColor;
-		ctx.shadowBlur = blur;
-		// Extend beyond the sides/bottom so only the upper edge is feathered.
-		ctx.fillRect(
-			-blur * 2,
-			height - stripHeight,
-			width + blur * 4,
-			stripHeight + blur * 2,
-		);
+		ctx.shadowBlur = blur * 0.5;
+		ctx.beginPath();
+		if (cornerRadius > 0) {
+			ctx.roundRect(
+				stripLeft,
+				stripTop,
+				stripWidthPx,
+				stripHeightPx,
+				cornerRadius,
+			);
+		} else {
+			ctx.rect(stripLeft, stripTop, stripWidthPx, stripHeightPx);
+		}
+		ctx.fill();
 		ctx.restore();
 	}
 
@@ -71,13 +100,15 @@ export function renderTextToContext({
 
 	drawMeasuredTextLayout({
 		ctx,
-		layout: resolved.measuredText,
+		layout: background.fullWidth
+			? { ...resolved.measuredText, textAlign: "center" }
+			: resolved.measuredText,
 		textColor: resolved.textColor,
 		background: background.fullWidth
 			? { ...background, enabled: false }
 			: background,
 		backgroundColor: resolved.backgroundColor,
-		textBaseline: baseline,
+		textBaseline: background.fullWidth ? "middle" : baseline,
 		strokeColor:
 			typeof node.params.params["stroke.color"] === "string"
 				? node.params.params["stroke.color"]

@@ -46,11 +46,16 @@ function wrapSubtitleText({
 	ctx,
 	text,
 	maxWidth,
+	maxLines,
 }: {
 	ctx: CanvasRenderingContext2D;
 	text: string;
 	maxWidth: number;
+	maxLines?: number;
 }): string {
+	if (maxLines === 1) {
+		return text.replace(/\s+/g, " ").trim();
+	}
 	const normalized = text.trim().replace(/\r\n/g, "\n");
 	const paragraphs = normalized.split("\n");
 	const wrappedParagraphs: string[] = [];
@@ -172,14 +177,20 @@ function resolveSubtitleStyle({
 function resolveTargetWidth({
 	canvasWidth,
 	placement,
+	stripWidth,
 }: {
 	canvasWidth: number;
 	placement: ReturnType<typeof resolveSubtitleStyle>["placement"];
+	stripWidth?: number;
 }): number {
 	const leftRatio = placement.marginLeftRatio ?? 0;
 	const rightRatio = placement.marginRightRatio ?? 0;
 	const hasExplicitMargins = leftRatio > 0 || rightRatio > 0;
 	if (!hasExplicitMargins) {
+		if (typeof stripWidth === "number" && stripWidth > 0) {
+			const clampedStripWidth = Math.max(15, Math.min(100, stripWidth));
+			return canvasWidth * (clampedStripWidth / 100) * 0.9;
+		}
 		return canvasWidth * SUBTITLE_MAX_WIDTH_RATIO;
 	}
 
@@ -276,6 +287,9 @@ export function buildSubtitleTextElement({
 	const maxWidth = resolveTargetWidth({
 		canvasWidth: canvasSize.width,
 		placement: style.placement,
+		stripWidth: style.background.fullWidth
+			? (style.background.stripWidth ?? 88)
+			: undefined,
 	});
 
 	let content = caption.text;
@@ -289,6 +303,7 @@ export function buildSubtitleTextElement({
 			ctx,
 			text: caption.text,
 			maxWidth,
+			maxLines: (caption.style as any)?.maxLines,
 		});
 		const measurement = measureWrappedTextBlock({
 			ctx,
@@ -299,17 +314,23 @@ export function buildSubtitleTextElement({
 			fontSize: style.fontSize,
 			lineHeight: style.lineHeight,
 		});
-		positionX = resolvePositionX({
-			canvasWidth: canvasSize.width,
-			textAlign: style.textAlign,
-			placement: style.placement,
-			visualRect: measurement.visualRect,
-		});
-		positionY = resolvePositionY({
-			canvasHeight: canvasSize.height,
-			placement: style.placement,
-			visualRect: measurement.visualRect,
-		});
+		positionX =
+			caption.style?.positionX != null
+				? caption.style.positionX
+				: resolvePositionX({
+						canvasWidth: canvasSize.width,
+						textAlign: style.textAlign,
+						placement: style.placement,
+						visualRect: measurement.visualRect,
+					});
+		positionY =
+			caption.style?.positionY != null
+				? caption.style.positionY
+				: resolvePositionY({
+						canvasHeight: canvasSize.height,
+						placement: style.placement,
+						visualRect: measurement.visualRect,
+					});
 	}
 
 	return {
@@ -346,7 +367,9 @@ export function buildSubtitleTextElement({
 			"background.blur": style.background.blur ?? 0,
 			"background.fullWidth": style.background.fullWidth ?? false,
 			"background.backdropBlur": style.background.backdropBlur ?? false,
-			"background.stripHeight": style.background.stripHeight ?? 22,
+			"background.stripHeight": style.background.stripHeight ?? 12,
+			"background.stripWidth": style.background.stripWidth ?? 88,
+			"background.tailHoldApplied": true,
 			"transform.positionX": positionX,
 			"transform.positionY": positionY,
 		},

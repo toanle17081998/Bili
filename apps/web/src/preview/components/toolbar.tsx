@@ -10,6 +10,7 @@ import {
 	FullScreenIcon,
 	PauseIcon,
 	PlayIcon,
+	PreviousIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Separator } from "@/components/ui/separator";
@@ -24,7 +25,7 @@ import { PREVIEW_ZOOM_PRESETS } from "@/preview/zoom";
 import { usePreviewViewport } from "./preview-viewport";
 import { GridPopover } from "./guide-popover";
 import { usePreviewStore } from "@/preview/preview-store";
-import type { MediaTime } from "@/wasm";
+import { type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 export function PreviewToolbar({
 	onToggleFullscreen,
@@ -34,7 +35,10 @@ export function PreviewToolbar({
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center pb-3 pt-5 px-5">
 			<TimecodeDisplay />
-			<PlayPauseButton />
+			<div className="flex items-center gap-1">
+				<SeekToStartButton />
+				<PlayPauseButton />
+			</div>
 			<div className="justify-self-end flex items-center gap-2.5">
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
@@ -130,6 +134,22 @@ function ZoomSelect() {
 				))}
 			</SelectContent>
 		</Select>
+	);
+}
+
+function SeekToStartButton() {
+	const editor = useEditor();
+
+	return (
+		<Button
+			variant="text"
+			size="icon"
+			onClick={() => editor.playback.seek({ time: ZERO_MEDIA_TIME })}
+			title="Về 0 giây (Đầu timeline)"
+			aria-label="Về 0 giây (Đầu timeline)"
+		>
+			<HugeiconsIcon icon={PreviousIcon} />
+		</Button>
 	);
 }
 

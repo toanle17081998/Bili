@@ -41,6 +41,9 @@ export interface SubtitleStyleOverrides {
 	letterSpacing?: number;
 	lineHeight?: number;
 	placement?: SubtitlePlacementStyle;
+	positionX?: number;
+	positionY?: number;
+	maxLines?: number;
 }
 
 export interface SubtitleCue extends CaptionChunk {

@@ -22,6 +22,22 @@ import { mediaTimeFromSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 const projectLoads = new Map<string, Promise<void>>();
 
 async function loadImportedVideo(editor: EditorCore, projectId: string) {
+	// Mặc định kích thước là dọc 9:16 (1080x1920) cho video import
+	const active = editor.project.getActiveOrNull();
+	if (
+		active &&
+		(active.settings.canvasSize.width !== 1080 ||
+			active.settings.canvasSize.height !== 1920)
+	) {
+		await editor.project.updateSettings({
+			settings: {
+				canvasSize: { width: 1080, height: 1920 },
+				canvasSizeMode: "preset",
+			},
+		});
+		await editor.project.saveCurrentProject();
+	}
+
 	const existing = editor.scenes.getActiveScene().tracks;
 	if (
 		[existing.main, ...existing.overlay].some((track) =>

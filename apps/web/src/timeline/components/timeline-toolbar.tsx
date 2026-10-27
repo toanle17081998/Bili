@@ -29,6 +29,7 @@ import { cn } from "@/utils/ui";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+	PreviousIcon,
 	Bookmark02Icon,
 	Delete02Icon,
 	SnowIcon,
@@ -49,6 +50,7 @@ import { OcRippleIcon } from "@/components/icons";
 import { GraphEditorPopover } from "./graph-editor/popover";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { useGraphEditorController } from "./graph-editor/use-controller";
+import { ZERO_MEDIA_TIME } from "@/wasm";
 
 export function TimelineToolbar({
 	zoomLevel,
@@ -142,6 +144,12 @@ function ToolbarLeftSection() {
 	return (
 		<div className="flex items-center gap-1">
 			<TooltipProvider delayDuration={500}>
+				<ToolbarButton
+					icon={<HugeiconsIcon icon={PreviousIcon} />}
+					tooltip="Về 0 giây (Đầu timeline)"
+					onClick={() => editor.playback.seek({ time: ZERO_MEDIA_TIME })}
+				/>
+
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={ScissorIcon} />}
 					tooltip="Split element"

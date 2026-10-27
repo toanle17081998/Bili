@@ -121,11 +121,13 @@ export class LocalizationPipeline {
 		videoPath,
 		workDir,
 		onProgress,
+		maxLines = 2,
 	}: {
 		projectId: string;
 		videoPath: string;
 		workDir: string;
 		onProgress?: (step: string, percent: number) => void;
+		maxLines?: number;
 	}): Promise<{
 		transcript: TranscriptSegment[];
 		translations: TranslationSegment[];
@@ -167,7 +169,12 @@ export class LocalizationPipeline {
 				item.vietnameseText,
 				item.sourceStart,
 				item.sourceEnd,
-				{ maxCharsPerCue: 38, maxCharsPerLine: 22, minDuration: 0 },
+				{
+					maxCharsPerCue: maxLines === 1 ? 22 : maxLines * 19,
+					maxCharsPerLine: 22,
+					minDuration: 0,
+					maxLines,
+				},
 			);
 
 			if (cues.length === 0) {
