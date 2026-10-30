@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import os from "os";
 import path from "path";
 import fs from "fs/promises";
 import { existsSync, statSync } from "fs";
@@ -57,44 +58,73 @@ export class FFmpegService {
 		options: { signal?: AbortSignal; onProgress?: (progress: FFmpegProgress) => void } = {},
 	): Promise<{ stdout: string; stderr: string }> {
 		const binary = this.getBinaryPath(cmd);
-		return new Promise((resolve, reject) => {
-			const process = spawn(binary, args, {
-				shell: false,
-				signal: options.signal,
-			});
-			let stdout = "";
-			let stderr = "";
-			let commandError: Error | undefined;
-			const progressReader = new FFmpegProgressReader();
-
-			process.stdout.on("data", (data) => {
-				stdout += data.toString();
-				if (options.onProgress) progressReader.push({ chunk: data.toString(), onProgress: options.onProgress });
-			});
-
-			process.stderr.on("data", (data) => {
-				stderr += data.toString();
-			});
-
-			process.on("close", (code) => {
-				if (commandError) {
-					reject(commandError);
-				} else if (code === 0) {
-					resolve({ stdout, stderr });
-				} else {
-					reject(
-						new Error(
-							`Command '${cmd} ${args.join(" ")}' exited with code ${code}.\n${stderr}`,
-						),
+		const tempFiles: string[] = [];
+		const actualArgs = [...args];
+		if (cmd === "ffmpeg") {
+			for (let i = 0; i < actualArgs.length - 1; i++) {
+				const flag = actualArgs[i];
+				const val = actualArgs[i + 1];
+				if (
+					(flag === "-filter_complex" || flag === "-vf" || flag === "-af") &&
+					typeof val === "string" &&
+					val.length > 4000
+				) {
+					const tmpFile = path.join(
+						os.tmpdir(),
+						`ffmpeg-filter-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`,
 					);
+					await fs.writeFile(tmpFile, val, "utf8");
+					tempFiles.push(tmpFile);
+					actualArgs[i] = `-/${flag.slice(1)}`;
+					actualArgs[i + 1] = tmpFile;
+					i++;
 				}
-			});
+			}
+		}
+		try {
+			return await new Promise((resolve, reject) => {
+				const process = spawn(binary, actualArgs, {
+					shell: false,
+					signal: options.signal,
+				});
+				let stdout = "";
+				let stderr = "";
+				let commandError: Error | undefined;
+				const progressReader = new FFmpegProgressReader();
 
-			process.on("error", (err) => {
-				// Wait for closed file handles before callers remove temporary files.
-				commandError = err;
+				process.stdout.on("data", (data) => {
+					stdout += data.toString();
+					if (options.onProgress) progressReader.push({ chunk: data.toString(), onProgress: options.onProgress });
+				});
+
+				process.stderr.on("data", (data) => {
+					stderr += data.toString();
+				});
+
+				process.on("close", (code) => {
+					if (commandError) {
+						reject(commandError);
+					} else if (code === 0) {
+						resolve({ stdout, stderr });
+					} else {
+						reject(
+							new Error(
+								`Command '${cmd} ${actualArgs.join(" ")}' exited with code ${code}.\n${stderr}`,
+							),
+						);
+					}
+				});
+
+				process.on("error", (err) => {
+					// Wait for closed file handles before callers remove temporary files.
+					commandError = err;
+				});
 			});
-		});
+		} finally {
+			for (const tmp of tempFiles) {
+				await fs.rm(tmp, { force: true }).catch(() => {});
+			}
+		}
 	}
 
 	static async probeVideo(

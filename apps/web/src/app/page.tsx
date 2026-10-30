@@ -27,6 +27,8 @@ import { toast } from "sonner";
 import { cn } from "@/utils/ui";
 import { filterSearchResults } from "@/source/search-filter";
 import type { SearchResult } from "@/source/types";
+import { AutoQueuePanel } from "@/components/auto-queue-panel";
+import { AutoQueueOptionsDialog } from "@/components/auto-queue-options-dialog";
 
 const SUGGESTION_TAGS = [
 	{ label: "🍜 Mukbang", query: "mukbang" },
@@ -54,6 +56,8 @@ export default function HomePage() {
 	const [qualities, setQualities] = useState<{ height: number; label: string }[]>([]);
 	const [selectedQuality, setSelectedQuality] = useState("best");
 	const [isLoadingQualities, setIsLoadingQualities] = useState(false);
+	const [isAutoOptionsOpen, setIsAutoOptionsOpen] = useState(false);
+	const [queueRefresh, setQueueRefresh] = useState(0);
 
 	useEffect(() => {
 		setQualities([]);
@@ -837,6 +841,14 @@ export default function HomePage() {
 							Đóng
 						</Button>
 						<Button
+							variant="outline"
+							disabled={isImporting}
+							onClick={() => setIsAutoOptionsOpen(true)}
+							className="border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
+						>
+							⚡ Xử lý Auto (hàng đợi)
+						</Button>
+						<Button
 							disabled={isImporting}
 							onClick={() =>
 								previewVideo && handleImportAndCreateProject(previewVideo)
@@ -848,6 +860,20 @@ export default function HomePage() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+			<AutoQueueOptionsDialog
+				open={isAutoOptionsOpen}
+				onOpenChange={setIsAutoOptionsOpen}
+				video={previewVideo}
+				qualities={qualities}
+				isLoadingQualities={isLoadingQualities}
+				selectedQuality={selectedQuality}
+				onSelectedQualityChange={setSelectedQuality}
+				onQueued={() => {
+					setQueueRefresh((value) => value + 1);
+					setPreviewVideo(null);
+				}}
+			/>
+			<AutoQueuePanel refreshKey={queueRefresh} />
 		</div>
 	);
 }

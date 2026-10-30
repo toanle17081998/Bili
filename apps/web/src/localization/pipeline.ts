@@ -326,30 +326,66 @@ export class LocalizationPipeline {
 				text: spokenText,
 			};
 			voiceovers.push(voiceSeg);
-
 		}
 
 		// Assemble one timeline asset. Silence between paragraphs retains their source
 		// timestamps; concatenating speech files directly would shift subsequent narration.
 		const combinedOut = path.join(runDir, "voice-main.wav");
-		const inputs = voiceovers.flatMap((segment) => ["-i", new URL(segment.audioUrl, "http://localhost").searchParams.get("file")!]);
-		const filters: string[] = [];
-		const labels: string[] = [];
+		if (!voiceovers.length) throw new Error("No Vietnamese speech to synthesize");
+		const BATCH_SIZE = 24;
 		let cursor = 0;
-		for (const [i, segment] of voiceovers.entries()) {
-			const silence = timing.dubbing_silence(cursor, segment.start);
-			if (!Number.isFinite(silence)) throw new Error("Invalid dubbing sequence");
-			if (silence > 0) {
-				filters.push(`anullsrc=r=48000:cl=mono,atrim=duration=${silence.toFixed(9)},asetpts=PTS-STARTPTS[s${i}]`);
-				labels.push(`[s${i}]`);
+		if (voiceovers.length <= BATCH_SIZE) {
+			const inputs = voiceovers.flatMap((segment) => ["-i", new URL(segment.audioUrl, "http://localhost").searchParams.get("file")!]);
+			const filters: string[] = [];
+			const labels: string[] = [];
+			for (const [i, segment] of voiceovers.entries()) {
+				const silence = timing.dubbing_silence(cursor, segment.start);
+				if (!Number.isFinite(silence)) throw new Error("Invalid dubbing sequence");
+				if (silence > 0) {
+					filters.push(`anullsrc=r=48000:cl=mono,atrim=duration=${silence.toFixed(9)},asetpts=PTS-STARTPTS[s${i}]`);
+					labels.push(`[s${i}]`);
+				}
+				filters.push(`[${i}:a]aresample=48000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS[v${i}]`);
+				labels.push(`[v${i}]`);
+				cursor = segment.end;
 			}
-			filters.push(`[${i}:a]aresample=48000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS[v${i}]`);
-			labels.push(`[v${i}]`);
-			cursor = segment.end;
+			filters.push(`${labels.join("")}concat=n=${labels.length}:v=0:a=1,apad,atrim=duration=${probe.duration}[voice]`);
+			await FFmpegService.runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[voice]", "-c:a", "pcm_s16le", combinedOut]);
+		} else {
+			const chunkFiles: string[] = [];
+			for (let offset = 0; offset < voiceovers.length; offset += BATCH_SIZE) {
+				const batch = voiceovers.slice(offset, offset + BATCH_SIZE);
+				const inputs = batch.flatMap((segment) => ["-i", new URL(segment.audioUrl, "http://localhost").searchParams.get("file")!]);
+				const filters: string[] = [];
+				const labels: string[] = [];
+				for (const [i, segment] of batch.entries()) {
+					const silence = timing.dubbing_silence(cursor, segment.start);
+					if (!Number.isFinite(silence)) throw new Error("Invalid dubbing sequence");
+					if (silence > 0) {
+						filters.push(`anullsrc=r=48000:cl=mono,atrim=duration=${silence.toFixed(9)},asetpts=PTS-STARTPTS[s${i}]`);
+						labels.push(`[s${i}]`);
+					}
+					filters.push(`[${i}:a]aresample=48000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS[v${i}]`);
+					labels.push(`[v${i}]`);
+					cursor = segment.end;
+				}
+				filters.push(`${labels.join("")}concat=n=${labels.length}:v=0:a=1[chunk]`);
+				const chunkOut = path.join(runDir, `voice-chunk-${chunkFiles.length}.wav`);
+				await FFmpegService.runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[chunk]", "-c:a", "pcm_s16le", chunkOut]);
+				chunkFiles.push(chunkOut);
+			}
+			const concatListPath = path.join(runDir, "voice-chunks.txt");
+			await fs.writeFile(
+				concatListPath,
+				chunkFiles.map((f) => `file '${f.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`).join("\n"),
+				"utf8",
+			);
+			await FFmpegService.runCommand("ffmpeg", [
+				"-y", "-f", "concat", "-safe", "0", "-i", concatListPath,
+				"-af", `apad,atrim=duration=${probe.duration}`,
+				"-c:a", "pcm_s16le", combinedOut,
+			]);
 		}
-		if (!labels.length) throw new Error("No Vietnamese speech to synthesize");
-		filters.push(`${labels.join("")}concat=n=${labels.length}:v=0:a=1,apad,atrim=duration=${probe.duration}[voice]`);
-		await FFmpegService.runCommand("ffmpeg", ["-y", ...inputs, "-filter_complex", filters.join(";"), "-map", "[voice]", "-c:a", "pcm_s16le", combinedOut]);
 		const combined = await FFmpegService.probeVideo(combinedOut);
 		await fs.writeFile(path.join(runDir, "dubbing-plan.json"), JSON.stringify(voiceovers, null, 2));
 		const combinedVoice: VoiceSegment = {
