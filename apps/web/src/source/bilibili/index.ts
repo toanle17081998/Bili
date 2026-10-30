@@ -10,6 +10,11 @@ import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
 import { publishDownloadedFile } from "./download-files";
+import {
+	listVideoQualities,
+	selectVideoFormat,
+	type VideoQualityOption,
+} from "./quality";
 
 // Route modules can reload independently in development. Keep the filesystem
 // writer shared across provider instances and hot reloads, keyed by output path.
@@ -18,7 +23,9 @@ const runtime = globalThis as typeof globalThis & {
 };
 const importsInFlight = (runtime.__bilibiliImports ??= new Map());
 
-const BILIBILI_HEADERS = {
+const BILIBILI_HEADERS: Record<string, string> = {
+	// Optional login cookie (SESSDATA=...) unlocks 1080p+ for logged-in accounts.
+	...(process.env.BILIBILI_COOKIE ? { Cookie: process.env.BILIBILI_COOKIE } : {}),
 	Referer: "https://www.bilibili.com/",
 };
 
@@ -237,7 +244,7 @@ export class BilibiliProvider implements VideoSourceProvider {
 		const playUrl = new URL("https://api.bilibili.com/x/player/playurl");
 		playUrl.searchParams.set("bvid", id);
 		playUrl.searchParams.set("cid", String(view.data.cid));
-		playUrl.searchParams.set("qn", "80");
+		playUrl.searchParams.set("qn", "127");
 		playUrl.searchParams.set("fnval", "4048");
 		playUrl.searchParams.set("fourk", "1");
 		const playResponse = await fetch(playUrl, { headers: BILIBILI_HEADERS });
@@ -369,12 +376,17 @@ export class BilibiliProvider implements VideoSourceProvider {
 		};
 	}
 
-	async importVideo(id: string): Promise<ImportedVideo> {
+	async getQualities(id: string): Promise<VideoQualityOption[]> {
+		const details = await this.fetchVideoDetails(id);
+		return listVideoQualities(details.formats);
+	}
+
+	async importVideo(id: string, quality?: number): Promise<ImportedVideo> {
 		const output = path.resolve(this.downloadDir, `${id}.full.mp4`);
-		const key = process.platform === "win32" ? output.toLowerCase() : output;
+		const key = `${process.platform === "win32" ? output.toLowerCase() : output}:${quality ?? "best"}`;
 		let request = importsInFlight.get(key);
 		if (!request) {
-			request = this.downloadVideo(id);
+			request = this.downloadVideo(id, quality);
 			importsInFlight.set(key, request);
 		}
 		try {
@@ -414,7 +426,16 @@ export class BilibiliProvider implements VideoSourceProvider {
 		}
 	}
 
-	private async downloadVideo(id: string): Promise<ImportedVideo> {
+	private async readCachedQuality(mediaPath: string): Promise<number | undefined> {
+		try {
+			const cached = JSON.parse(await fs.readFile(`${mediaPath}.json`, "utf8"));
+			return typeof cached.quality === "number" ? cached.quality : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async downloadVideo(id: string, quality?: number): Promise<ImportedVideo> {
 		await fs.mkdir(this.downloadDir, { recursive: true });
 		const targetFile = path.join(this.downloadDir, `${id}.full.mp4`);
 		const downloadFile = path.join(this.downloadDir, `${id}.full.download.mp4`);
@@ -443,7 +464,11 @@ export class BilibiliProvider implements VideoSourceProvider {
 			}
 			meta = await this.getMetadata(id);
 		}
+		const selectedHeight =
+			(formats.length ? selectVideoFormat(formats, quality)?.height : undefined) ||
+			quality;
 		const imported: ImportedVideo = {
+			quality: selectedHeight,
 			fullVideo: true,
 			provider: "bilibili",
 			sourceId: id,
@@ -459,6 +484,12 @@ export class BilibiliProvider implements VideoSourceProvider {
 		try {
 			const stat = await fs.stat(targetFile);
 			if (stat.size < 50000) needsDownload = true;
+			else if (
+				quality &&
+				selectedHeight &&
+				(await this.readCachedQuality(targetFile)) !== selectedHeight
+			)
+				needsDownload = true;
 		} catch {
 			needsDownload = true;
 		}
@@ -467,6 +498,7 @@ export class BilibiliProvider implements VideoSourceProvider {
 			const videoUrl = `https://www.bilibili.com/video/${id}`;
 
 			let downloadedSuccess = false;
+			const heightLimit = quality ? `[height<=${quality}]` : "";
 
 			// 1. Try fast and reliable direct FFmpeg stream muxing with Bilibili mirror CDN
 			if (formats.length > 0) {
@@ -479,7 +511,10 @@ export class BilibiliProvider implements VideoSourceProvider {
 				const avcVideos = videos.filter(
 					(f) => f.vcodec && f.vcodec.toLowerCase().startsWith("avc"),
 				);
-				const candidateVideos = avcVideos.length ? avcVideos : videos;
+				const candidateVideos = (() => {
+				const selected = selectVideoFormat(videos, quality);
+				return selected ? [selected] : avcVideos.length ? avcVideos : videos;
+			})();
 				candidateVideos.sort(
 					(a, b) =>
 						(b.height || 0) * 100000 +
@@ -524,10 +559,13 @@ export class BilibiliProvider implements VideoSourceProvider {
 						"3",
 						"--continue",
 						"--no-playlist",
+						...(process.env.BILIBILI_COOKIE
+							? ["--add-header", `Cookie:${process.env.BILIBILI_COOKIE}`]
+							: []),
 						"--no-progress",
 						// Prefer H.264 because HEVC cannot be decoded by all supported browsers.
 						"-f",
-						"bv*[ext=mp4][vcodec^=avc]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]/best[vcodec^=avc]",
+						`bv*[ext=mp4][vcodec^=avc]${heightLimit}+ba[ext=m4a]/b[ext=mp4][vcodec^=avc]${heightLimit}/best[vcodec^=avc]${heightLimit}/best[vcodec^=avc]`,
 						"-o",
 						downloadFile,
 						videoUrl,

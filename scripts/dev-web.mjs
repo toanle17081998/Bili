@@ -26,14 +26,20 @@ if (
 	nodeArgs.push("--use-env-proxy");
 }
 
+const useTurbopack = process.argv.includes("--turbopack");
+const bundlerArgs = useTurbopack ? ["--turbopack"] : ["--webpack"];
+const forwardArgs = process.argv
+	.slice(2)
+	.filter((arg) => arg !== "--webpack" && arg !== "--turbopack");
+
 const child = spawn(
 	process.execPath,
 	[
 		...nodeArgs,
 		require.resolve("next/dist/bin/next"),
 		"dev",
-		"--turbopack",
-		...process.argv.slice(2),
+		...bundlerArgs,
+		...forwardArgs,
 	],
 	{
 		cwd: appDirectory,

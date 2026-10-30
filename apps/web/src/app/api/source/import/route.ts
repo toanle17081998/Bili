@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BilibiliProvider } from "@/source/bilibili";
+import { isValidQuality } from "@/source/bilibili/quality";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ImportedVideo } from "@/source/types";
 
 const importsInFlight = new Map<string, Promise<ImportedVideo>>();
 
-async function downloadVideo(id: string) {
-	let request = importsInFlight.get(id);
+async function downloadVideo(id: string, quality?: number) {
+	const key = `${id}:${quality ?? "best"}`;
+	let request = importsInFlight.get(key);
 	if (!request) {
 		request = (async () => {
-			const imported = await new BilibiliProvider().importVideo(id);
+			const imported = await new BilibiliProvider().importVideo(id, quality);
 			await fs.writeFile(
 				`${imported.localMediaPath}.json`,
 				JSON.stringify(imported),
@@ -18,12 +20,12 @@ async function downloadVideo(id: string) {
 			);
 			return imported;
 		})();
-		importsInFlight.set(id, request);
+		importsInFlight.set(key, request);
 	}
 	try {
 		return await request;
 	} finally {
-		if (importsInFlight.get(id) === request) importsInFlight.delete(id);
+		if (importsInFlight.get(key) === request) importsInFlight.delete(key);
 	}
 }
 
@@ -96,7 +98,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
 	try {
-		const { id } = await request.json();
+		const { id, quality } = await request.json();
 		if (typeof id !== "string" || !/^BV[a-zA-Z0-9]{10}$/.test(id)) {
 			return NextResponse.json(
 				{ success: false, error: "Missing video id" },
@@ -104,7 +106,14 @@ export async function POST(request: NextRequest) {
 			);
 		}
 
-		const imported = await downloadVideo(id);
+		if (quality !== undefined && !isValidQuality(quality)) {
+			return NextResponse.json(
+				{ success: false, error: "Invalid quality" },
+				{ status: 400 },
+			);
+		}
+
+		const imported = await downloadVideo(id, quality);
 
 		return NextResponse.json({
 			success: true,

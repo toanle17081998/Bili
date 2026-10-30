@@ -7,6 +7,20 @@ const nextConfig: NextConfig = {
 		removeConsole: process.env.NODE_ENV === "production",
 	},
 	reactStrictMode: true,
+	webpack: (config) => {
+		config.experiments = { ...config.experiments, asyncWebAssembly: true };
+		config.module.rules.push({
+			test: /\.wasm$/,
+			include: /onnxruntime-web/,
+			type: "asset/resource",
+		});
+		config.module.rules.push({
+			test: /\.wasm$/,
+			include: /node_modules[\\/](?:\.bun[\\/][^\\/]*[\\/]node_modules[\\/])?opencut-wasm[\\/]/,
+			type: "webassembly/async",
+		});
+		return config;
+	},
 	productionBrowserSourceMaps: true,
 	output: "standalone",
 	outputFileTracingIncludes: {

@@ -50,6 +50,7 @@ export interface ImportedVideo {
 	duration: number;
 	localMediaPath: string; // File path or local serving URL
 	audioPath?: string;
+	quality?: number; // Downloaded video height in pixels
 	createdAt: string;
 }
 
@@ -58,5 +59,5 @@ export interface VideoSourceProvider {
 	search(query: string, page?: number): Promise<SearchPage>;
 	getMetadata(id: string): Promise<VideoMetadata>;
 	getPreview(id: string): Promise<VideoPreview>;
-	importVideo(id: string): Promise<ImportedVideo>;
+	importVideo(id: string, quality?: number): Promise<ImportedVideo>;
 }

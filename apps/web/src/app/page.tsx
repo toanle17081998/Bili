@@ -51,6 +51,31 @@ export default function HomePage() {
 	const [results, setResults] = useState<SearchResult[]>([]);
 	const [previewVideo, setPreviewVideo] = useState<SearchResult | null>(null);
 	const [isImporting, setIsImporting] = useState(false);
+	const [qualities, setQualities] = useState<{ height: number; label: string }[]>([]);
+	const [selectedQuality, setSelectedQuality] = useState("best");
+	const [isLoadingQualities, setIsLoadingQualities] = useState(false);
+
+	useEffect(() => {
+		setQualities([]);
+		setSelectedQuality("best");
+		if (!previewVideo || !/^BV[a-zA-Z0-9]{10}$/.test(previewVideo.id)) return;
+		const controller = new AbortController();
+		setIsLoadingQualities(true);
+		fetch(`/api/source/qualities?id=${encodeURIComponent(previewVideo.id)}`, {
+			signal: controller.signal,
+		})
+			.then((res) => res.json())
+			.then((data) => {
+				if (data.success && Array.isArray(data.qualities)) {
+					setQualities(data.qualities);
+				}
+			})
+			.catch(() => {})
+			.finally(() => {
+				if (!controller.signal.aborted) setIsLoadingQualities(false);
+			});
+		return () => controller.abort();
+	}, [previewVideo]);
 
 	const [page, setPage] = useState(1);
 	const [total, setTotal] = useState(0);
@@ -252,7 +277,10 @@ export default function HomePage() {
 			const res = await fetch("/api/source/import", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: video.id }),
+				body: JSON.stringify({
+					id: video.id,
+					...(selectedQuality !== "best" && { quality: Number(selectedQuality) }),
+				}),
 			});
 			const data = await res.json();
 			if (!data.success) {
@@ -783,6 +811,24 @@ export default function HomePage() {
 					</div>
 
 					<DialogFooter className="flex gap-2 sm:justify-end mt-2">
+						<label className="flex items-center gap-2 text-xs text-neutral-400 sm:mr-auto">
+							Chất lượng
+							<select
+								value={selectedQuality}
+								onChange={(e) => setSelectedQuality(e.target.value)}
+								disabled={isImporting || isLoadingQualities}
+								className="h-9 rounded-md border border-neutral-700 bg-neutral-950 px-2 text-sm text-neutral-200"
+							>
+								<option value="best">
+									{isLoadingQualities ? "Đang tải..." : "Tốt nhất"}
+								</option>
+								{qualities.map((q) => (
+									<option key={q.height} value={q.height}>
+										{q.label}
+									</option>
+								))}
+							</select>
+						</label>
 						<Button
 							variant="outline"
 							onClick={() => setPreviewVideo(null)}
